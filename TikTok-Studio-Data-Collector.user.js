@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         TikTok Studio 数据采集器
 // @namespace    qualitell.tiktok.collector
-// @version      0.3.4
-// @description  TikTok Studio 自动显示完播率、观看倍率、1s/3s留存、新增粉丝和互动率；支持隐藏隐私列、压缩数据列、周报分析、美化 XLSX、视频封面和视频链接。
+// @version      0.3.5
+// @description  TikTok Studio 自动显示完播率、观看倍率、1s/3s留存、新增粉丝和互动率；支持周报分析、美化 XLSX、视频封面和视频链接。
 // @author       Qualitell
 // @homepageURL  https://github.com/piboss001/tiktok-studio-data-collector
 // @supportURL   https://github.com/piboss001/tiktok-studio-data-collector/issues
@@ -25,7 +25,7 @@
       ? unsafeWindow
       : window;
 
-  const VERSION = '0.3.4';
+  const VERSION = '0.3.5';
 
   const items = new Map();
   const detailRows = new Map();
@@ -36,21 +36,13 @@
   const autoMetricLoading = new Set();
   const coverCache = new Map();
 
-  const PRIVACY_KEY =
-    'qtk_privacy_hidden';
-
-  let privacyHidden =
-    localStorage.getItem(
-      PRIVACY_KEY
-    ) !== '0';
-
   let failedCount = 0;
   let busy = false;
   let minimized = false;
 
   let autoTimer = null;
-  let layoutTimer = null;
   let observer = null;
+  let studioColumns = null;
 
   const originalFetch =
     page.fetch.bind(page);
@@ -68,17 +60,9 @@
 
   const COLORS = {
     navy: 'FF0F172A',
-    navy2: 'FF1E293B',
     blue: 'FF2563EB',
-    blueLight: 'FFDBEAFE',
-    green: 'FF16A34A',
-    amber: 'FFD97706',
-    red: 'FFDC2626',
     slate50: 'FFF8FAFC',
-    slate100: 'FFF1F5F9',
     slate200: 'FFE2E8F0',
-    slate500: 'FF64748B',
-    slate700: 'FF334155',
     white: 'FFFFFFFF'
   };
 
@@ -190,9 +174,7 @@
           )
       );
 
-    if (
-      !arr.length
-    ) {
+    if (!arr.length) {
       return '';
     }
 
@@ -224,9 +206,7 @@
             a - b
         );
 
-    if (
-      !arr.length
-    ) {
+    if (!arr.length) {
       return '';
     }
 
@@ -242,63 +222,6 @@
             arr[mid - 1] +
             arr[mid]
           ) / 2
-    );
-  }
-
-  function quantile(
-    values,
-    q
-  ) {
-    const arr =
-      values
-        .filter(
-          value =>
-            typeof value ===
-              'number' &&
-            Number.isFinite(
-              value
-            )
-        )
-        .sort(
-          (a, b) =>
-            a - b
-        );
-
-    if (
-      !arr.length
-    ) {
-      return '';
-    }
-
-    if (
-      arr.length === 1
-    ) {
-      return arr[0];
-    }
-
-    const pos =
-      (
-        arr.length - 1
-      ) * q;
-
-    const base =
-      Math.floor(pos);
-
-    const rest =
-      pos - base;
-
-    return (
-      arr[base + 1] !==
-        undefined
-        ? (
-            arr[base] +
-            rest *
-            (
-              arr[base + 1] -
-              arr[base]
-            )
-          )
-        : arr[base]
     );
   }
 
@@ -412,7 +335,6 @@
     );
 
     scheduleAutoMetrics();
-    scheduleStudioLayout();
   }
 
   page.fetch =
@@ -541,10 +463,9 @@
         .split('; ')
         .find(
           cookie =>
-            cookie
-              .startsWith(
-                'tt_csrf_token='
-              )
+            cookie.startsWith(
+              'tt_csrf_token='
+            )
         );
 
     if (!entry) {
@@ -709,8 +630,7 @@
         response.status,
 
       data:
-        await response
-          .json()
+        await response.json()
     };
   }
 
@@ -915,10 +835,7 @@
 
     const durationSec =
       durationMs
-        ? (
-            durationMs /
-            1000
-          )
+        ? durationMs / 1000
         : '';
 
     const avgWatch =
@@ -1139,92 +1056,57 @@
 
       like_rate:
         views
-          ? (
-              likes /
-              views
-            )
+          ? likes / views
           : '',
 
       engagement_rate:
         views
           ? (
-              (
-                likes +
-                comments +
-                shares +
-                favorites
-              ) /
-              views
-            )
+              likes +
+              comments +
+              shares +
+              favorites
+            ) / views
           : ''
     };
   }
 
-  /* =========================
-     TikTok Studio 列宽优化
-  ========================= */
+  function detectStudioColumns() {
+    if (
+      studioColumns?.row
+        ?.isConnected
+    ) {
+      return studioColumns;
+    }
 
-  function textMatches(
-    text,
-    aliases
-  ) {
-    const clean =
-      String(
-        text || ''
-      )
-        .replace(
-          /\s+/g,
-          ''
-        )
-        .trim();
-
-    return aliases.some(
-      alias =>
-        clean === alias ||
-        clean.startsWith(
-          alias
-        )
-    );
-  }
-
-  function findHeaderColumn(
-    aliases
-  ) {
-    const candidates =
+    const nodes =
       document.querySelectorAll(
-        'span,div,p'
+        'div,span'
       );
 
     for (
-      const node of candidates
+      const node of nodes
     ) {
       if (
         node.closest(
           '#qualitell-tiktok-panel'
-        ) ||
-        node.closest(
-          '.qtk-row-metrics'
         )
       ) {
         continue;
       }
 
-      const rect =
-        node
-          .getBoundingClientRect();
+      const text =
+        normalizeText(
+          node.textContent
+        );
 
       if (
-        rect.width <= 0 ||
-        rect.height <= 0 ||
-        rect.top > 350
-      ) {
-        continue;
-      }
-
-      if (
-        !textMatches(
-          node.textContent,
-          aliases
+        !text ||
+        (
+          !text.includes(
+            '观看次数'
+          ) &&
+          text !== '观看'
         )
       ) {
         continue;
@@ -1235,45 +1117,145 @@
 
       for (
         let i = 0;
-        i < 6 &&
+        i < 7 &&
         current?.parentElement;
         i++
       ) {
         const parent =
-          current
-            .parentElement;
+          current.parentElement;
 
-        const siblings = [
+        const children = [
           ...parent.children
         ];
 
-        const parentRect =
-          parent
-            .getBoundingClientRect();
+        const rowText =
+          children.map(
+            child =>
+              normalizeText(
+                child.textContent
+              )
+          );
+
+        const hasPrivacy =
+          rowText.some(
+            text =>
+              text.includes(
+                '隐私'
+              ) ||
+              text.includes(
+                '完播率'
+              )
+          );
+
+        const hasLike =
+          rowText.some(
+            text =>
+              text === '赞' ||
+              text.includes(
+                '点赞'
+              )
+          );
+
+        const hasComment =
+          rowText.some(
+            text =>
+              text.includes(
+                '评论'
+              )
+          );
 
         if (
-          siblings.length >= 5 &&
-          siblings.length <= 12 &&
-          parentRect.width > 650
+          children.length >= 5 &&
+          parent
+            .getBoundingClientRect()
+            .width >
+            600 &&
+          hasPrivacy &&
+          hasLike &&
+          hasComment
         ) {
-          const index =
-            siblings.indexOf(
-              current
+          const privacy =
+            rowText.findIndex(
+              text =>
+                text.includes(
+                  '隐私'
+                ) ||
+                text.includes(
+                  '完播率'
+                )
             );
 
+          const views =
+            rowText.findIndex(
+              text =>
+                text.includes(
+                  '观看次数'
+                ) ||
+                text === '观看'
+            );
+
+          const likes =
+            rowText.findIndex(
+              text =>
+                text === '赞' ||
+                text.includes(
+                  '点赞'
+                )
+            );
+
+          const comments =
+            rowText.findIndex(
+              text =>
+                text.includes(
+                  '评论'
+                )
+            );
+
+          const actions =
+            rowText.findIndex(
+              text =>
+                text.includes(
+                  '操作'
+                )
+            );
+
+          studioColumns = {
+            row:
+              parent,
+
+            content:
+              0,
+
+            privacy,
+            views,
+            likes,
+            comments,
+            actions
+          };
+
           if (
-            index >= 0
+            privacy >= 0
           ) {
-            return {
-              cell:
-                current,
+            const headerCell =
+              children[
+                privacy
+              ];
 
-              row:
-                parent,
-
-              index
-            };
+            if (
+              !normalizeText(
+                headerCell
+                  .textContent
+              ).includes(
+                '完播率'
+              )
+            ) {
+              headerCell
+                .textContent =
+                '完播率';
+            }
           }
+
+          return studioColumns;
         }
 
         current =
@@ -1282,39 +1264,6 @@
     }
 
     return null;
-  }
-
-  function forceCellWidth(
-    cell,
-    width
-  ) {
-    if (!cell) {
-      return;
-    }
-
-    cell.style.setProperty(
-      'width',
-      `${width}px`,
-      'important'
-    );
-
-    cell.style.setProperty(
-      'min-width',
-      `${width}px`,
-      'important'
-    );
-
-    cell.style.setProperty(
-      'max-width',
-      `${width}px`,
-      'important'
-    );
-
-    cell.style.setProperty(
-      'flex',
-      `0 0 ${width}px`,
-      'important'
-    );
   }
 
   function findDirectCellContainer(
@@ -1340,10 +1289,11 @@
       if (
         child.children
           .length >
-        minimumIndex &&
+          minimumIndex &&
         child
           .getBoundingClientRect()
-          .width > 600
+          .width >
+          600
       ) {
         return child;
       }
@@ -1351,293 +1301,6 @@
 
     return null;
   }
-
-  function applyColumnToRows(
-    columnInfo,
-    width,
-    hideContent = false
-  ) {
-    if (
-      !columnInfo
-    ) {
-      return;
-    }
-
-    const index =
-      columnInfo.index;
-
-    for (
-      const item
-      of items.values()
-    ) {
-      const videoRow =
-        findVideoRow(
-          item
-        );
-
-      if (!videoRow) {
-        continue;
-      }
-
-      const container =
-        findDirectCellContainer(
-          videoRow,
-          index
-        );
-
-      if (!container) {
-        continue;
-      }
-
-      const cell =
-        container.children[
-          index
-        ];
-
-      if (!cell) {
-        continue;
-      }
-
-      forceCellWidth(
-        cell,
-        width
-      );
-
-      if (
-        hideContent
-      ) {
-        cell.classList.add(
-          'qtk-privacy-cell-hidden'
-        );
-      } else {
-        cell.classList.remove(
-          'qtk-privacy-cell-hidden'
-        );
-      }
-    }
-  }
-
-  function eyeSvg(
-    hidden
-  ) {
-    if (hidden) {
-      return `
-        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
-          <path
-            d="M3 3l18 18M10.6 10.6a2 2 0 002.8 2.8M9.9 4.3A10.6 10.6 0 0112 4c5.5 0 9.5 5 9.5 5s-1.4 1.8-3.6 3.2M6.2 6.2C3.9 7.5 2.5 9 2.5 9s4 5 9.5 5c1 0 1.9-.2 2.8-.5"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.8"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-        </svg>
-      `;
-    }
-
-    return `
-      <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
-        <path
-          d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-        />
-        <circle
-          cx="12"
-          cy="12"
-          r="2.6"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-        />
-      </svg>
-    `;
-  }
-
-  function setupPrivacyColumn(
-    info
-  ) {
-    if (!info) {
-      return;
-    }
-
-    const cell =
-      info.cell;
-
-    let button =
-      cell.querySelector(
-        '.qtk-privacy-eye'
-      );
-
-    if (!button) {
-      button =
-        document.createElement(
-          'button'
-        );
-
-      button.className =
-        'qtk-privacy-eye';
-
-      button.type =
-        'button';
-
-      button.addEventListener(
-        'click',
-        event => {
-          event.preventDefault();
-          event.stopPropagation();
-
-          privacyHidden =
-            !privacyHidden;
-
-          localStorage.setItem(
-            PRIVACY_KEY,
-            privacyHidden
-              ? '1'
-              : '0'
-          );
-
-          scheduleStudioLayout(
-            0
-          );
-        }
-      );
-
-      cell.appendChild(
-        button
-      );
-    }
-
-    button.innerHTML =
-      eyeSvg(
-        privacyHidden
-      );
-
-    button.title =
-      privacyHidden
-        ? '显示隐私列'
-        : '隐藏隐私列';
-
-    if (
-      privacyHidden
-    ) {
-      cell.classList.add(
-        'qtk-privacy-header-hidden'
-      );
-
-      forceCellWidth(
-        cell,
-        34
-      );
-
-      applyColumnToRows(
-        info,
-        34,
-        true
-      );
-
-    } else {
-      cell.classList.remove(
-        'qtk-privacy-header-hidden'
-      );
-
-      forceCellWidth(
-        cell,
-        82
-      );
-
-      applyColumnToRows(
-        info,
-        82,
-        false
-      );
-    }
-  }
-
-  function optimizeStudioColumns() {
-    const privacy =
-      findHeaderColumn([
-        '隐私'
-      ]);
-
-    const views =
-      findHeaderColumn([
-        '观看次数',
-        '观看'
-      ]);
-
-    const likes =
-      findHeaderColumn([
-        '赞',
-        '点赞'
-      ]);
-
-    const comments =
-      findHeaderColumn([
-        '评论'
-      ]);
-
-    if (privacy) {
-      setupPrivacyColumn(
-        privacy
-      );
-    }
-
-    if (views) {
-      forceCellWidth(
-        views.cell,
-        74
-      );
-
-      applyColumnToRows(
-        views,
-        74
-      );
-    }
-
-    if (likes) {
-      forceCellWidth(
-        likes.cell,
-        52
-      );
-
-      applyColumnToRows(
-        likes,
-        52
-      );
-    }
-
-    if (comments) {
-      forceCellWidth(
-        comments.cell,
-        58
-      );
-
-      applyColumnToRows(
-        comments,
-        58
-      );
-    }
-  }
-
-  function scheduleStudioLayout(
-    delay = 300
-  ) {
-    clearTimeout(
-      layoutTimer
-    );
-
-    layoutTimer =
-      setTimeout(
-        optimizeStudioColumns,
-        delay
-      );
-  }
-
-  /* =========================
-     Studio 视频行识别
-  ========================= */
 
   function climbToVideoRow(
     element
@@ -1667,34 +1330,43 @@
         current
           .getBoundingClientRect();
 
-      const buttons =
-        current.querySelectorAll
-          ? current.querySelectorAll(
-              'button'
-            ).length
-          : 0;
-
       const links =
-        current.querySelectorAll
-          ? current.querySelectorAll(
+        current
+          .querySelectorAll
+        ? current
+            .querySelectorAll(
               'a'
             ).length
-          : 0;
+        : 0;
+
+      const buttons =
+        current
+          .querySelectorAll
+        ? current
+            .querySelectorAll(
+              'button'
+            ).length
+        : 0;
 
       if (
-        rect.width > 650 &&
-        rect.height >= 55 &&
-        rect.height <= 180
+        rect.width >
+          650 &&
+        rect.height >=
+          50 &&
+        rect.height <=
+          180
       ) {
         fallback =
           current;
 
         if (
+          links >= 1 ||
           buttons >= 2 ||
-          links >= 2 ||
-          current.getAttribute(
-            'role'
-          ) === 'row' ||
+          current
+            .getAttribute(
+              'role'
+            ) ===
+            'row' ||
           current.tagName ===
             'TR'
         ) {
@@ -1725,20 +1397,21 @@
     ) {
       try {
         const element =
-          document
-            .querySelector(
-              selector
-            );
+          document.querySelector(
+            selector
+          );
 
-        if (element) {
-          const row =
-            climbToVideoRow(
-              element
-            );
+        if (!element) {
+          continue;
+        }
 
-          if (row) {
-            return row;
-          }
+        const row =
+          climbToVideoRow(
+            element
+          );
+
+        if (row) {
+          return row;
         }
       } catch {}
     }
@@ -1746,9 +1419,64 @@
     return null;
   }
 
-  function findRowByTitle(
+  function titleIsUniqueAmongPublished(
     item
   ) {
+    const title =
+      normalizeText(
+        item?.desc
+      );
+
+    if (!title) {
+      return false;
+    }
+
+    let count = 0;
+
+    for (
+      const other
+      of items.values()
+    ) {
+      if (
+        isScheduled(
+          other
+        )
+      ) {
+        continue;
+      }
+
+      if (
+        normalizeText(
+          other?.desc
+        ) ===
+        title
+      ) {
+        count++;
+      }
+
+      if (
+        count > 1
+      ) {
+        return false;
+      }
+    }
+
+    return (
+      count === 1
+    );
+  }
+
+  function findUniqueRowByTitle(
+    item
+  ) {
+    if (
+      !titleIsUniqueAmongPublished(
+        item
+      )
+    ) {
+      return null;
+    }
+
     const title =
       normalizeText(
         item?.desc
@@ -1762,10 +1490,13 @@
       title.slice(
         0,
         Math.min(
-          22,
+          26,
           title.length
         )
       );
+
+    const found =
+      new Set();
 
     const walker =
       document
@@ -1786,13 +1517,19 @@
       const parent =
         node.parentElement;
 
+      if (!parent) {
+        continue;
+      }
+
       if (
-        !parent ||
         parent.closest(
           '#qualitell-tiktok-panel'
         ) ||
         parent.closest(
-          '.qtk-row-metrics'
+          '.qtk-secondary'
+        ) ||
+        parent.closest(
+          '.qtk-extra-meta'
         )
       ) {
         continue;
@@ -1804,38 +1541,41 @@
         );
 
       if (
-        text.length >= 6 &&
-        (
-          text.includes(
-            key
-          ) ||
-          key.includes(
-            text.slice(
-              0,
-              15
-            )
-          )
+        !text ||
+        !text.includes(
+          key
         )
       ) {
-        const row =
-          climbToVideoRow(
-            parent
-          );
+        continue;
+      }
 
-        if (row) {
-          return row;
-        }
+      const row =
+        climbToVideoRow(
+          parent
+        );
+
+      if (row) {
+        found.add(
+          row
+        );
       }
     }
 
-    return null;
+    return (
+      found.size === 1
+        ? [...found][0]
+        : null
+    );
   }
 
   function findVideoRow(
     item
   ) {
     if (
-      !item?.item_id
+      !item?.item_id ||
+      isScheduled(
+        item
+      )
     ) {
       return null;
     }
@@ -1846,180 +1586,267 @@
           item.item_id
         )
       ) ||
-      findRowByTitle(
+      findUniqueRowByTitle(
         item
       )
     );
   }
 
-  /* =========================
-     3列 × 2行核心指标框
-  ========================= */
-
-  function buildMetricBox(
-    videoId
+  function readPrivacyText(
+    cell
   ) {
-    const box =
-      document
-        .createElement(
+    const text =
+      String(
+        cell?.innerText ||
+        cell?.textContent ||
+        ''
+      )
+        .replace(
+          /\s+/g,
+          ' '
+        )
+        .trim();
+
+    return (
+      text ||
+      '所有人'
+    );
+  }
+
+  function addSecondaryMetric(
+    cell,
+    id,
+    text
+  ) {
+    if (!cell) {
+      return;
+    }
+
+    let secondary =
+      cell.querySelector(
+        `:scope > .qtk-secondary[data-qtk-id="${id}"]`
+      );
+
+    if (!secondary) {
+      secondary =
+        document.createElement(
           'div'
         );
 
-    box.className =
-      'qtk-row-metrics';
+      secondary.className =
+        'qtk-secondary';
 
-    box.dataset.videoId =
-      videoId;
+      secondary.dataset.qtkId =
+        id;
 
-    box.innerHTML = `
-      <div class="qtk-metric-loading">
-        指标加载中…
-      </div>
-    `;
+      cell.appendChild(
+        secondary
+      );
+    }
 
-    return box;
+    secondary.textContent =
+      text;
   }
 
-  function renderRowMetrics(
-    box,
-    row
+  function applyStudioMetrics(
+    item,
+    rowData
+  ) {
+    const row =
+      findVideoRow(
+        item
+      );
+
+    const columns =
+      detectStudioColumns();
+
+    if (
+      !row ||
+      !columns
+    ) {
+      return false;
+    }
+
+    const maxIndex =
+      Math.max(
+        columns.privacy,
+        columns.views,
+        columns.likes,
+        columns.comments,
+        columns.actions,
+        columns.content
+      );
+
+    const container =
+      findDirectCellContainer(
+        row,
+        maxIndex
+      );
+
+    if (!container) {
+      return false;
+    }
+
+    const privacyCell =
+      columns.privacy >= 0
+        ? container.children[
+            columns.privacy
+          ]
+        : null;
+
+    const viewsCell =
+      columns.views >= 0
+        ? container.children[
+            columns.views
+          ]
+        : null;
+
+    const likesCell =
+      columns.likes >= 0
+        ? container.children[
+            columns.likes
+          ]
+        : null;
+
+    const commentsCell =
+      columns.comments >= 0
+        ? container.children[
+            columns.comments
+          ]
+        : null;
+
+    const actionsCell =
+      columns.actions >= 0
+        ? container.children[
+            columns.actions
+          ]
+        : null;
+
+    if (
+      !row.dataset
+        .qtkPrivacyText &&
+      privacyCell
+    ) {
+      row.dataset.qtkPrivacyText =
+        readPrivacyText(
+          privacyCell
+        );
+    }
+
+    if (
+      privacyCell
+    ) {
+      privacyCell.innerHTML = `
+        <div class="qtk-finish-value">
+          ${pct(rowData.finish_rate)}
+        </div>
+      `;
+    }
+
+    addSecondaryMetric(
+      viewsCell,
+      'watch',
+      `倍率 ${pct(rowData.watch_ratio)}`
+    );
+
+    addSecondaryMetric(
+      likesCell,
+      'r1',
+      `1s ${pct(rowData.retention_1s)}`
+    );
+
+    addSecondaryMetric(
+      commentsCell,
+      'r3',
+      `3s ${pct(rowData.retention_3s)}`
+    );
+
+    if (
+      actionsCell
+    ) {
+      if (
+        getComputedStyle(
+          actionsCell
+        ).position ===
+        'static'
+      ) {
+        actionsCell.style
+          .position =
+          'relative';
+      }
+
+      let meta =
+        actionsCell.querySelector(
+          ':scope > .qtk-extra-meta'
+        );
+
+      if (!meta) {
+        meta =
+          document.createElement(
+            'div'
+          );
+
+        meta.className =
+          'qtk-extra-meta';
+
+        actionsCell.appendChild(
+          meta
+        );
+      }
+
+      meta.innerHTML = `
+        <span title="新增粉丝">
+          +粉 ${
+            rowData.new_followers === ''
+              ? '-'
+              : rowData.new_followers
+          }
+        </span>
+
+        <span title="互动率">
+          互动 ${pct(rowData.engagement_rate)}
+        </span>
+
+        <span title="隐私">
+          ${
+            row.dataset.qtkPrivacyText ||
+            '所有人'
+          }
+        </span>
+      `;
+    }
+
+    row.dataset
+      .qtkMetricsApplied =
+      String(
+        item.item_id
+      );
+
+    return true;
+  }
+
+  async function loadAutoMetric(
+    item
   ) {
     if (
-      !box ||
-      !row
+      isScheduled(
+        item
+      )
     ) {
       return;
     }
 
-    box.classList.remove(
-      'qtk-metric-error'
-    );
-
-    box.innerHTML = `
-      <div
-        class="qtk-mini-metric"
-        title="完播率"
-      >
-        <span>完播</span>
-        <b>${pct(row.finish_rate)}</b>
-      </div>
-
-      <div
-        class="qtk-mini-metric"
-        title="观看倍率"
-      >
-        <span>倍率</span>
-        <b>${pct(row.watch_ratio)}</b>
-      </div>
-
-      <div
-        class="qtk-mini-metric"
-        title="1秒留存"
-      >
-        <span>1s留存</span>
-        <b>${pct(row.retention_1s)}</b>
-      </div>
-
-      <div
-        class="qtk-mini-metric"
-        title="3秒留存"
-      >
-        <span>3s留存</span>
-        <b>${pct(row.retention_3s)}</b>
-      </div>
-
-      <div
-        class="qtk-mini-metric"
-        title="新增粉丝"
-      >
-        <span>新增粉</span>
-        <b>${
-          row.new_followers === ''
-            ? '-'
-            : row.new_followers
-        }</b>
-      </div>
-
-      <div
-        class="qtk-mini-metric"
-        title="互动率"
-      >
-        <span>互动率</span>
-        <b>${pct(row.engagement_rate)}</b>
-      </div>
-    `;
-  }
-
-  function renderMetricMessage(
-    box,
-    text
-  ) {
-    if (!box) {
-      return;
-    }
-
-    box.classList.add(
-      'qtk-metric-error'
-    );
-
-    box.innerHTML = `
-      <div class="qtk-metric-message">
-        ${text}
-      </div>
-    `;
-  }
-
-  function attachMetricBox(
-    item
-  ) {
     const videoId =
       String(
         item.item_id
       );
 
-    const rowElement =
-      findVideoRow(
-        item
-      );
-
-    if (!rowElement) {
-      return null;
-    }
-
-    rowElement
-      .dataset
-      .qtkItem =
-      videoId;
-
-    let box =
-      rowElement.querySelector(
-        `:scope > .qtk-row-metrics[data-video-id="${videoId}"]`
-      );
-
-    if (!box) {
-      box =
-        buildMetricBox(
-          videoId
-        );
-
-      const position =
-        getComputedStyle(
-          rowElement
-        ).position;
-
-      if (
-        position ===
-        'static'
-      ) {
-        rowElement.style
-          .position =
-          'relative';
-      }
-
-      rowElement
-        .appendChild(
-          box
-        );
+    if (
+      autoMetricLoading.has(
+        videoId
+      )
+    ) {
+      return;
     }
 
     const cached =
@@ -2031,91 +1858,24 @@
       cached?.type ===
       'public'
     ) {
-      renderRowMetrics(
-        box,
+      applyStudioMetrics(
+        item,
         cached.row
       );
-    }
 
-    if (
-      cached?.type ===
-      'private'
-    ) {
-      renderMetricMessage(
-        box,
-        '非公开'
-      );
-    }
-
-    if (
-      cached?.type ===
-      'scheduled'
-    ) {
-      renderMetricMessage(
-        box,
-        '预约发布'
-      );
-    }
-
-    if (
-      cached?.type ===
-      'error'
-    ) {
-      renderMetricMessage(
-        box,
-        '暂不可用'
-      );
-    }
-
-    return box;
-  }
-
-  async function loadAutoMetric(
-    item
-  ) {
-    const videoId =
-      String(
-        item.item_id
-      );
-
-    if (
-      autoMetricCache.has(
-        videoId
-      ) ||
-      autoMetricLoading.has(
-        videoId
-      )
-    ) {
       return;
     }
 
-    const box =
-      attachMetricBox(
-        item
-      );
-
-    if (!box) {
+    if (cached) {
       return;
     }
 
-    if (
-      isScheduled(
+    const row =
+      findVideoRow(
         item
-      )
-    ) {
-      autoMetricCache.set(
-        videoId,
-        {
-          type:
-            'scheduled'
-        }
       );
 
-      renderMetricMessage(
-        box,
-        '预约发布'
-      );
-
+    if (!row) {
       return;
     }
 
@@ -2148,7 +1908,8 @@
           ?.private_status;
 
       if (
-        privateStatus === 0
+        privateStatus ===
+        0
       ) {
         const normalized =
           normalizeRow(
@@ -2172,9 +1933,27 @@
           normalized
         );
 
-        renderRowMetrics(
-          box,
+        applyStudioMetrics(
+          item,
           normalized
+        );
+
+      } else if (
+        privateStatus ===
+          null ||
+        privateStatus ===
+          undefined
+      ) {
+        autoMetricCache.set(
+          videoId,
+          {
+            type:
+              'unknown'
+          }
+        );
+
+        unknownIds.add(
+          videoId
         );
 
       } else {
@@ -2188,11 +1967,6 @@
 
         privateIds.add(
           videoId
-        );
-
-        renderMetricMessage(
-          box,
-          '非公开'
         );
       }
 
@@ -2213,10 +1987,7 @@
         }
       );
 
-      renderMetricMessage(
-        box,
-        '暂不可用'
-      );
+      failedCount++;
 
     } finally {
       autoMetricLoading.delete(
@@ -2236,12 +2007,23 @@
       return;
     }
 
-    const visible = [];
+    detectStudioColumns();
+
+    const visible =
+      [];
 
     for (
       const item
       of items.values()
     ) {
+      if (
+        isScheduled(
+          item
+        )
+      ) {
+        continue;
+      }
+
       const row =
         findVideoRow(
           item
@@ -2251,20 +2033,16 @@
         continue;
       }
 
-      attachMetricBox(
-        item
-      );
-
       const rect =
         row
           .getBoundingClientRect();
 
       if (
         rect.bottom >=
-          -150 &&
+          -120 &&
         rect.top <=
           window.innerHeight +
-          400
+          450
       ) {
         visible.push(
           item
@@ -2281,11 +2059,9 @@
       );
 
       await sleep(
-        350
+        300
       );
     }
-
-    scheduleStudioLayout();
   }
 
   function scheduleAutoMetrics(
@@ -2313,32 +2089,26 @@
     observer =
       new MutationObserver(
         mutations => {
-          let relevant =
-            false;
-
-          for (
-            const mutation
-            of mutations
+          if (
+            studioColumns &&
+            !studioColumns
+              .row
+              ?.isConnected
           ) {
-            if (
-              mutation
-                .addedNodes
-                ?.length
-            ) {
-              relevant =
-                true;
-
-              break;
-            }
+            studioColumns =
+              null;
           }
 
-          if (relevant) {
+          if (
+            mutations.some(
+              mutation =>
+                mutation
+                  .addedNodes
+                  ?.length
+            )
+          ) {
             scheduleAutoMetrics(
               450
-            );
-
-            scheduleStudioLayout(
-              500
             );
           }
         }
@@ -2357,26 +2127,9 @@
 
     window.addEventListener(
       'scroll',
-      () => {
+      () =>
         scheduleAutoMetrics(
           250
-        );
-
-        scheduleStudioLayout(
-          300
-        );
-      },
-      {
-        passive:
-          true
-      }
-    );
-
-    window.addEventListener(
-      'resize',
-      () =>
-        scheduleStudioLayout(
-          200
         ),
       {
         passive:
@@ -2385,10 +2138,6 @@
     );
   }
 
-  /* =========================
-     周报分析
-  ========================= */
-
   function getRangeDays() {
     const value =
       $('qtk-range')
@@ -2396,7 +2145,8 @@
       '7';
 
     return (
-      value === 'all'
+      value ===
+        'all'
         ? null
         : Number(
             value
@@ -2414,12 +2164,11 @@
       getRangeDays();
 
     if (!days) {
-      return rows
-        .sort(
-          (a, b) =>
-            b.publish_ts -
-            a.publish_ts
-        );
+      return rows.sort(
+        (a, b) =>
+          b.publish_ts -
+          a.publish_ts
+      );
     }
 
     const cutoff =
@@ -2774,10 +2523,6 @@
       );
   }
 
-  /* =========================
-     样式
-  ========================= */
-
   function injectStyle() {
     if (
       document.getElementById(
@@ -2797,241 +2542,71 @@
 
     style.textContent = `
 
-      /* ===== 列表指标：3列 × 2行 ===== */
+      .qtk-finish-value {
+        font-size:12px !important;
+        line-height:18px !important;
+        font-weight:700 !important;
+        color:#161823 !important;
+        text-align:center !important;
+        white-space:nowrap !important;
+      }
 
-      .qtk-row-metrics {
+      .qtk-secondary {
+        margin-top:2px !important;
+        font-size:9px !important;
+        line-height:12px !important;
+        font-weight:500 !important;
+        color:#8a8b91 !important;
+        text-align:center !important;
+        white-space:nowrap !important;
+        pointer-events:none !important;
+      }
+
+      .qtk-extra-meta {
         position:absolute !important;
-
-        right:118px !important;
-        top:50% !important;
-
-        transform:
-          translateY(-50%) !important;
-
-        width:218px !important;
-        min-width:218px !important;
-
-        display:grid !important;
-
-        grid-template-columns:
-          repeat(3, 1fr) !important;
-
-        grid-template-rows:
-          repeat(2, 1fr) !important;
-
-        gap:5px 6px !important;
-
-        padding:7px 8px !important;
-
-        background:
-          rgba(248,250,252,.98) !important;
-
-        border:
-          1px solid
-          #e5e7eb !important;
-
-        border-radius:
-          8px !important;
-
-        box-shadow:
-          0 1px 5px
-          rgba(0,0,0,.05) !important;
-
-        z-index:
-          10 !important;
-
-        font-family:
-          Arial,
-          "Microsoft YaHei",
-          sans-serif !important;
-      }
-
-      .qtk-mini-metric {
-        min-width:0 !important;
+        left:2px !important;
+        bottom:1px !important;
 
         display:flex !important;
-
-        flex-direction:
-          column !important;
-
-        justify-content:
-          center !important;
-
-        align-items:
-          center !important;
-
-        gap:1px !important;
-
-        min-height:
-          29px !important;
-
-        border-radius:
-          5px !important;
-
-        background:
-          #fff !important;
-      }
-
-      .qtk-mini-metric span {
-        font-size:
-          9.5px !important;
-
-        line-height:
-          12px !important;
-
-        color:
-          #8a8b91 !important;
-
-        font-weight:
-          400 !important;
-
-        white-space:
-          nowrap !important;
-      }
-
-      .qtk-mini-metric b {
-        font-size:
-          12px !important;
-
-        line-height:
-          15px !important;
-
-        color:
-          #161823 !important;
-
-        font-weight:
-          700 !important;
-
-        white-space:
-          nowrap !important;
-      }
-
-      .qtk-metric-loading,
-      .qtk-metric-message {
-        grid-column:
-          1 / 4 !important;
-
-        display:flex !important;
-
-        align-items:
-          center !important;
-
-        justify-content:
-          center !important;
-
-        min-height:
-          60px !important;
-
-        font-size:
-          11px !important;
-
-        color:
-          #8b8b95 !important;
-      }
-
-      /* ===== 隐私列眼睛 ===== */
-
-      .qtk-privacy-eye {
-        width:22px !important;
-        height:22px !important;
-
-        min-width:22px !important;
-
-        display:inline-flex !important;
+        gap:4px !important;
 
         align-items:center !important;
-        justify-content:center !important;
 
-        padding:0 !important;
-        margin:0 0 0 4px !important;
+        white-space:nowrap !important;
 
-        border:none !important;
+        font-size:8px !important;
+        line-height:10px !important;
 
-        background:
-          transparent !important;
+        color:#8a8b91 !important;
 
-        color:
-          #6b7280 !important;
-
-        cursor:pointer !important;
-
-        border-radius:
-          5px !important;
+        pointer-events:none !important;
       }
 
-      .qtk-privacy-eye:hover {
-        background:
-          #f2f2f3 !important;
-
-        color:
-          #161823 !important;
+      .qtk-extra-meta span {
+        white-space:nowrap !important;
       }
-
-      .qtk-privacy-header-hidden >
-      :not(.qtk-privacy-eye) {
-        display:none !important;
-      }
-
-      .qtk-privacy-header-hidden {
-        display:flex !important;
-
-        align-items:center !important;
-        justify-content:center !important;
-
-        padding-left:0 !important;
-        padding-right:0 !important;
-      }
-
-      .qtk-privacy-cell-hidden {
-        visibility:
-          hidden !important;
-
-        pointer-events:
-          none !important;
-      }
-
-      /* ===== 右下控制面板 ===== */
 
       #qualitell-tiktok-panel,
       #qualitell-tiktok-panel * {
-        box-sizing:
-          border-box;
+        box-sizing:border-box;
       }
 
       #qualitell-tiktok-panel {
-        position:
-          fixed;
+        position:fixed;
+        right:12px;
+        bottom:12px;
+        z-index:2147483647;
 
-        right:
-          12px;
+        width:310px;
+        max-height:84vh;
 
-        bottom:
-          12px;
+        overflow:hidden;
 
-        z-index:
-          2147483647;
+        background:rgba(22,22,26,.985);
+        color:#fff;
 
-        width:
-          320px;
-
-        max-height:
-          85vh;
-
-        overflow:
-          hidden;
-
-        background:
-          rgba(22,22,26,.985);
-
-        color:
-          #fff;
-
-        border:
-          1px solid
-          rgba(255,255,255,.10);
-
-        border-radius:
-          11px;
+        border:1px solid rgba(255,255,255,.10);
+        border-radius:11px;
 
         box-shadow:
           0 14px 40px
@@ -3045,14 +2620,10 @@
 
       .qtk-header {
         display:flex;
-
         align-items:center;
+        justify-content:space-between;
 
-        justify-content:
-          space-between;
-
-        padding:
-          10px 12px;
+        padding:10px 12px;
 
         border-bottom:
           1px solid
@@ -3060,47 +2631,29 @@
       }
 
       .qtk-title {
-        font-size:
-          14px;
-
-        font-weight:
-          700;
+        font-size:14px;
+        font-weight:700;
       }
 
       .qtk-version {
-        margin-top:
-          2px;
-
-        font-size:
-          10px;
-
-        color:
-          rgba(255,255,255,.45);
+        margin-top:2px;
+        font-size:10px;
+        color:rgba(255,255,255,.45);
       }
 
       .qtk-minimize {
-        border:
-          0;
-
-        background:
-          transparent;
-
-        color:
-          #fff;
-
-        font-size:
-          20px;
-
-        cursor:
-          pointer;
+        border:0;
+        background:transparent;
+        color:#fff;
+        font-size:20px;
+        cursor:pointer;
       }
 
       #qtk-body {
         max-height:
-          calc(85vh - 50px);
+          calc(84vh - 50px);
 
-        overflow:
-          auto;
+        overflow:auto;
 
         padding:
           10px 12px 13px;
@@ -3108,20 +2661,14 @@
 
       .qtk-row {
         display:flex;
-
         align-items:center;
+        justify-content:space-between;
 
-        justify-content:
-          space-between;
+        gap:10px;
 
-        gap:
-          10px;
+        padding:3px 0;
 
-        padding:
-          3px 0;
-
-        font-size:
-          11px;
+        font-size:11px;
       }
 
       .qtk-row span {
@@ -3130,8 +2677,7 @@
       }
 
       .qtk-row b {
-        font-weight:
-          600;
+        font-weight:600;
       }
 
       .qtk-toolbar {
@@ -3140,120 +2686,83 @@
         grid-template-columns:
           1fr 1fr;
 
-        gap:
-          6px;
+        gap:6px;
 
-        margin-top:
-          9px;
+        margin-top:9px;
       }
 
       .qtk-toolbar button,
       .qtk-select {
-        width:
-          100%;
+        width:100%;
 
-        min-height:
-          31px;
+        min-height:31px;
 
-        border:
-          0;
+        border:0;
+        border-radius:7px;
 
-        border-radius:
-          7px;
+        padding:7px;
 
-        padding:
-          7px;
-
-        font-size:
-          11px;
+        font-size:11px;
       }
 
       .qtk-toolbar button {
-        cursor:
-          pointer;
-
-        font-weight:
-          600;
+        cursor:pointer;
+        font-weight:600;
       }
 
       #qtk-scan {
-        background:
-          #fe2c55;
-
-        color:
-          #fff;
+        background:#fe2c55;
+        color:#fff;
       }
 
       #qtk-fetch {
-        background:
-          #25f4ee;
-
-        color:
-          #111;
+        background:#25f4ee;
+        color:#111;
       }
 
       #qtk-export-xlsx,
       #qtk-export-csv {
-        background:
-          #fff;
-
-        color:
-          #111;
+        background:#fff;
+        color:#111;
       }
 
       #qtk-reset {
-        background:
-          #393940;
-
-        color:
-          #fff;
+        background:#393940;
+        color:#fff;
       }
 
       .qtk-toolbar button:disabled {
-        opacity:
-          .35;
-
-        cursor:
-          not-allowed;
+        opacity:.35;
+        cursor:not-allowed;
       }
 
       .qtk-progress {
-        height:
-          5px;
+        height:5px;
 
-        margin-top:
-          9px;
+        margin-top:9px;
 
-        overflow:
-          hidden;
+        overflow:hidden;
 
-        border-radius:
-          999px;
+        border-radius:999px;
 
         background:
           rgba(255,255,255,.10);
       }
 
       #qtk-progress-bar {
-        height:
-          100%;
+        height:100%;
+        width:0%;
 
-        width:
-          0%;
-
-        background:
-          #25f4ee;
+        background:#25f4ee;
 
         transition:
           width .2s ease;
       }
 
       .qtk-divider {
-        height:
-          1px;
+        height:1px;
 
-        margin:
-          10px 0;
+        margin:10px 0;
 
         background:
           rgba(255,255,255,.08);
@@ -3261,31 +2770,19 @@
 
       .qtk-section-title {
         display:flex;
-
         align-items:center;
+        justify-content:space-between;
 
-        justify-content:
-          space-between;
+        margin-bottom:7px;
 
-        margin-bottom:
-          7px;
-
-        font-size:
-          12px;
-
-        font-weight:
-          700;
+        font-size:12px;
+        font-weight:700;
       }
 
       .qtk-select {
-        background:
-          #303036;
-
-        color:
-          #fff;
-
-        outline:
-          none;
+        background:#303036;
+        color:#fff;
+        outline:none;
       }
 
       .qtk-summary-grid {
@@ -3294,41 +2791,34 @@
         grid-template-columns:
           repeat(3,1fr);
 
-        gap:
-          5px;
+        gap:5px;
       }
 
       .qtk-card {
-        padding:
-          7px;
+        padding:7px;
 
-        background:
-          #2a2a30;
+        background:#2a2a30;
 
         border:
           1px solid
           rgba(255,255,255,.05);
 
-        border-radius:
-          7px;
+        border-radius:7px;
       }
 
       .qtk-card span {
         display:block;
 
-        margin-bottom:
-          3px;
+        margin-bottom:3px;
 
-        font-size:
-          9px;
+        font-size:9px;
 
         color:
           rgba(255,255,255,.45);
       }
 
       .qtk-card b {
-        font-size:
-          13px;
+        font-size:13px;
       }
 
       .qtk-rank-controls {
@@ -3338,14 +2828,11 @@
 
       .qtk-top-item {
         display:flex;
-
         align-items:center;
 
-        gap:
-          6px;
+        gap:6px;
 
-        padding:
-          6px 0;
+        padding:6px 0;
 
         border-bottom:
           1px solid
@@ -3354,60 +2841,39 @@
 
       .qtk-rank {
         display:flex;
-
         align-items:center;
-
         justify-content:center;
 
         flex:none;
 
-        width:
-          18px;
+        width:18px;
+        height:18px;
 
-        height:
-          18px;
+        border-radius:5px;
 
-        border-radius:
-          5px;
+        background:#34343b;
 
-        background:
-          #34343b;
-
-        font-size:
-          9px;
-
-        font-weight:
-          700;
+        font-size:9px;
+        font-weight:700;
       }
 
       .qtk-top-main {
-        flex:
-          1;
-
-        min-width:
-          0;
+        flex:1;
+        min-width:0;
       }
 
       .qtk-top-title {
-        overflow:
-          hidden;
+        overflow:hidden;
+        text-overflow:ellipsis;
+        white-space:nowrap;
 
-        text-overflow:
-          ellipsis;
-
-        white-space:
-          nowrap;
-
-        font-size:
-          10px;
+        font-size:10px;
       }
 
       .qtk-top-meta {
-        margin-top:
-          2px;
+        margin-top:2px;
 
-        font-size:
-          8px;
+        font-size:8px;
 
         color:
           rgba(255,255,255,.40);
@@ -3416,81 +2882,47 @@
       .qtk-top-value {
         flex:none;
 
-        font-size:
-          10px;
+        font-size:10px;
+        font-weight:700;
 
-        font-weight:
-          700;
-
-        color:
-          #25f4ee;
+        color:#25f4ee;
       }
 
       .qtk-empty {
-        padding:
-          6px 0;
+        padding:6px 0;
 
-        font-size:
-          10px;
+        font-size:10px;
 
         color:
           rgba(255,255,255,.42);
       }
 
       .qtk-tip {
-        margin-top:
-          8px;
+        margin-top:8px;
 
-        font-size:
-          9px;
-
-        line-height:
-          1.45;
+        font-size:9px;
+        line-height:1.45;
 
         color:
           rgba(255,255,255,.36);
-      }
-
-      @media(max-width:1350px) {
-
-        .qtk-row-metrics {
-          width:
-            198px !important;
-
-          min-width:
-            198px !important;
-
-          right:
-            108px !important;
-        }
-
-        .qtk-mini-metric b {
-          font-size:
-            11px !important;
-        }
-
       }
 
     `;
 
     (
       document.head ||
-      document
-        .documentElement
-    )
-      .appendChild(
-        style
-      );
+      document.documentElement
+    ).appendChild(
+      style
+    );
   }
 
   function buildPanel() {
     if (
-      !document
-        .documentElement ||
-      document
-        .getElementById(
-          'qualitell-tiktok-panel'
-        )
+      !document.documentElement ||
+      document.getElementById(
+        'qualitell-tiktok-panel'
+      )
     ) {
       return;
     }
@@ -3498,10 +2930,9 @@
     injectStyle();
 
     const panel =
-      document
-        .createElement(
-          'div'
-        );
+      document.createElement(
+        'div'
+      );
 
     panel.id =
       'qualitell-tiktok-panel';
@@ -3516,7 +2947,7 @@
           </div>
 
           <div class="qtk-version">
-            V${VERSION} · 3×2 指标
+            V${VERSION} · 无遮挡指标
           </div>
 
         </div>
@@ -3678,7 +3109,6 @@
               id="qtk-rank-metric"
               class="qtk-select"
             >
-
               <option value="views">
                 播放 TOP
               </option>
@@ -3706,7 +3136,6 @@
               <option value="engagement_rate">
                 互动率 TOP
               </option>
-
             </select>
 
           </div>
@@ -3722,7 +3151,7 @@
         </div>
 
         <div class="qtk-tip">
-          隐私列默认折叠，可点击表头小眼睛显示。
+          预约视频不抓取指标；原“隐私”列改为完播率，其它指标显示在原数据下方。
         </div>
 
       </div>
@@ -3925,7 +3354,8 @@
       ) {
         stableRounds++;
       } else {
-        stableRounds = 0;
+        stableRounds =
+          0;
       }
 
       lastCount =
@@ -3953,7 +3383,6 @@
     );
 
     scheduleAutoMetrics();
-    scheduleStudioLayout();
   }
 
   async function fetchAllInsights() {
@@ -3966,7 +3395,8 @@
 
     busy = true;
 
-    failedCount = 0;
+    failedCount =
+      0;
 
     detailRows.clear();
     privateIds.clear();
@@ -4041,6 +3471,29 @@
             }
           );
 
+          applyStudioMetrics(
+            item,
+            row
+          );
+
+        } else if (
+          privateStatus ===
+            null ||
+          privateStatus ===
+            undefined
+        ) {
+          unknownIds.add(
+            videoId
+          );
+
+          autoMetricCache.set(
+            videoId,
+            {
+              type:
+                'unknown'
+            }
+          );
+
         } else {
           privateIds.add(
             videoId
@@ -4088,7 +3541,6 @@
     );
 
     scheduleAutoMetrics();
-    scheduleStudioLayout();
   }
 
   function resetAll() {
@@ -4105,11 +3557,15 @@
     autoMetricLoading.clear();
     coverCache.clear();
 
-    failedCount = 0;
+    failedCount =
+      0;
+
+    studioColumns =
+      null;
 
     document
       .querySelectorAll(
-        '.qtk-row-metrics'
+        '.qtk-secondary,.qtk-extra-meta'
       )
       .forEach(
         element =>
@@ -4294,13 +3750,12 @@
 
       `TikTok数据_${new Date()
         .toISOString()
-        .slice(0,10)}.csv`
+        .slice(
+          0,
+          10
+        )}.csv`
     );
   }
-
-  /* =========================
-     XLSX
-  ========================= */
 
   function gmFetchBlob(
     url
@@ -4529,10 +3984,13 @@
     return {
       top:
         side,
+
       bottom:
         side,
+
       left:
         side,
+
       right:
         side
     };
@@ -5084,7 +4542,8 @@
       return;
     }
 
-    busy = true;
+    busy =
+      true;
 
     updateUI(
       '生成 XLSX…'
@@ -5152,7 +4611,8 @@
       );
 
     } finally {
-      busy = false;
+      busy =
+        false;
 
       updateUI();
     }
@@ -5160,8 +4620,7 @@
 
   function boot() {
     if (
-      !document
-        .documentElement
+      !document.documentElement
     ) {
       setTimeout(
         boot,
@@ -5177,42 +4636,27 @@
       startDomObserver();
 
       setTimeout(
-        () => {
+        () =>
           scheduleAutoMetrics(
             200
-          );
-
-          scheduleStudioLayout(
-            300
-          );
-        },
+          ),
         900
-      );
-
-      setInterval(
-        () => {
-          scheduleStudioLayout(
-            0
-          );
-        },
-        2500
       );
     };
 
     if (
-      document
-        .readyState ===
+      document.readyState ===
       'loading'
     ) {
-      document
-        .addEventListener(
-          'DOMContentLoaded',
-          start,
-          {
-            once:
-              true
-          }
-        );
+      document.addEventListener(
+        'DOMContentLoaded',
+        start,
+        {
+          once:
+            true
+        }
+      );
+
     } else {
       start();
     }
