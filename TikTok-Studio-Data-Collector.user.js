@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         TikTok Studio 数据采集器
 // @namespace    qualitell.tiktok.collector
-// @version      0.3.0
-// @description  批量采集 TikTok Studio 公开视频数据，自动生成周报、TOP 排名与留存分析，并导出 XLSX/CSV；自动排除预约及非公开视频。
+// @version      0.3.1
+// @description  批量采集 TikTok Studio 公开视频数据，自动生成周报、TOP 排名与留存分析，并导出 XLSX/CSV；XLSX 视频标题可直接点击打开 TikTok 视频。
 // @author       Qualitell
 // @homepageURL  https://github.com/piboss001/tiktok-studio-data-collector
 // @supportURL   https://github.com/piboss001/tiktok-studio-data-collector/issues
@@ -18,8 +18,12 @@
 (() => {
   'use strict';
 
-  const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-  const VERSION = '0.3.0';
+  const page =
+    typeof unsafeWindow !== 'undefined'
+      ? unsafeWindow
+      : window;
+
+  const VERSION = '0.3.1';
 
   const items = new Map();
   const detailRows = new Map();
@@ -33,29 +37,68 @@
   const originalFetch = page.fetch.bind(page);
   const OriginalXHR = page.XMLHttpRequest;
 
-  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-  const $ = id => document.getElementById(id);
+  const sleep = ms =>
+    new Promise(resolve =>
+      setTimeout(resolve, ms)
+    );
+
+  const $ = id =>
+    document.getElementById(id);
 
   function num(value) {
-    if (value === null || value === undefined || value === '') return '';
+    if (
+      value === null ||
+      value === undefined ||
+      value === ''
+    ) {
+      return '';
+    }
+
     const n = Number(value);
-    return Number.isNaN(n) ? '' : n;
+
+    return Number.isNaN(n)
+      ? ''
+      : n;
   }
 
   function pct(value, digits = 1) {
-    if (value === null || value === undefined || value === '') return '';
+    if (
+      value === null ||
+      value === undefined ||
+      value === ''
+    ) {
+      return '';
+    }
+
     const n = Number(value);
-    return Number.isNaN(n) ? '' : `${(n * 100).toFixed(digits)}%`;
+
+    if (Number.isNaN(n)) {
+      return '';
+    }
+
+    return `${(n * 100).toFixed(digits)}%`;
   }
 
   function formatDate(timestamp) {
-    if (!timestamp) return '';
-    return new Date(Number(timestamp) * 1000).toLocaleString('zh-CN');
+    if (!timestamp) {
+      return '';
+    }
+
+    return new Date(
+      Number(timestamp) * 1000
+    ).toLocaleString('zh-CN');
   }
 
   function csvEscape(value) {
-    if (value === null || value === undefined) return '';
+    if (
+      value === null ||
+      value === undefined
+    ) {
+      return '';
+    }
+
     const str = String(value);
+
     return /[",\n\r]/.test(str)
       ? `"${str.replace(/"/g, '""')}"`
       : str;
@@ -63,58 +106,119 @@
 
   function safeClone(value) {
     try {
-      return JSON.parse(JSON.stringify(value));
+      return JSON.parse(
+        JSON.stringify(value)
+      );
     } catch {
       return null;
     }
   }
 
   function mean(values) {
-    const arr = values.filter(
-      v => typeof v === 'number' && Number.isFinite(v)
+    const arr =
+      values.filter(
+        v =>
+          typeof v === 'number' &&
+          Number.isFinite(v)
+      );
+
+    if (!arr.length) {
+      return '';
+    }
+
+    return (
+      arr.reduce(
+        (a, b) => a + b,
+        0
+      ) / arr.length
     );
-
-    if (!arr.length) return '';
-
-    return arr.reduce((a, b) => a + b, 0) / arr.length;
   }
 
   function median(values) {
-    const arr = values
-      .filter(v => typeof v === 'number' && Number.isFinite(v))
-      .sort((a, b) => a - b);
+    const arr =
+      values
+        .filter(
+          v =>
+            typeof v === 'number' &&
+            Number.isFinite(v)
+        )
+        .sort(
+          (a, b) => a - b
+        );
 
-    if (!arr.length) return '';
+    if (!arr.length) {
+      return '';
+    }
 
-    const mid = Math.floor(arr.length / 2);
+    const mid =
+      Math.floor(
+        arr.length / 2
+      );
 
     return arr.length % 2
       ? arr[mid]
-      : (arr[mid - 1] + arr[mid]) / 2;
+      : (
+          arr[mid - 1] +
+          arr[mid]
+        ) / 2;
   }
 
   function quantile(values, q) {
-    const arr = values
-      .filter(v => typeof v === 'number' && Number.isFinite(v))
-      .sort((a, b) => a - b);
+    const arr =
+      values
+        .filter(
+          v =>
+            typeof v === 'number' &&
+            Number.isFinite(v)
+        )
+        .sort(
+          (a, b) => a - b
+        );
 
-    if (!arr.length) return '';
-    if (arr.length === 1) return arr[0];
+    if (!arr.length) {
+      return '';
+    }
 
-    const pos = (arr.length - 1) * q;
-    const base = Math.floor(pos);
-    const rest = pos - base;
+    if (arr.length === 1) {
+      return arr[0];
+    }
+
+    const pos =
+      (arr.length - 1) * q;
+
+    const base =
+      Math.floor(pos);
+
+    const rest =
+      pos - base;
 
     return arr[base + 1] !== undefined
-      ? arr[base] + rest * (arr[base + 1] - arr[base])
+      ? (
+          arr[base] +
+          rest *
+          (
+            arr[base + 1] -
+            arr[base]
+          )
+        )
       : arr[base];
   }
 
   function isScheduled(item) {
-    const now = Math.floor(Date.now() / 1000);
+    const now =
+      Math.floor(
+        Date.now() / 1000
+      );
 
-    const postTime = Number(item?.post_time || 0);
-    const scheduleTime = Number(item?.schedule_time || 0);
+    const postTime =
+      Number(
+        item?.post_time || 0
+      );
+
+    const scheduleTime =
+      Number(
+        item?.schedule_time || 0
+      );
 
     return (
       postTime > now + 60 ||
@@ -123,16 +227,24 @@
   }
 
   function candidateItems() {
-    return [...items.values()].filter(
-      item => !isScheduled(item)
+    return [
+      ...items.values()
+    ].filter(
+      item =>
+        !isScheduled(item)
     );
   }
 
   function scheduledItems() {
-    return [...items.values()].filter(isScheduled);
+    return [
+      ...items.values()
+    ].filter(isScheduled);
   }
 
-  function captureItemList(url, data) {
+  function captureItemList(
+    url,
+    data
+  ) {
     if (
       !url ||
       !String(url).includes(
@@ -144,13 +256,19 @@
 
     if (
       !data ||
-      !Array.isArray(data.item_list)
+      !Array.isArray(
+        data.item_list
+      )
     ) {
       return;
     }
 
-    for (const item of data.item_list) {
-      if (!item?.item_id) continue;
+    for (
+      const item of data.item_list
+    ) {
+      if (!item?.item_id) {
+        continue;
+      }
 
       items.set(
         String(item.item_id),
@@ -165,37 +283,48 @@
     );
   }
 
-  // 监听页面 fetch
-  page.fetch = async function (...args) {
-    const response = await originalFetch(...args);
+  page.fetch =
+    async function (...args) {
+      const response =
+        await originalFetch(
+          ...args
+        );
 
-    try {
-      const input = args[0];
+      try {
+        const input =
+          args[0];
 
-      const url =
-        typeof input === 'string'
-          ? input
-          : input?.url;
+        const url =
+          typeof input === 'string'
+            ? input
+            : input?.url;
 
-      if (
-        url &&
-        String(url).includes(
-          '/tiktok/creator/manage/item_list/v1/'
-        )
-      ) {
-        response
-          .clone()
-          .json()
-          .then(data => captureItemList(url, data))
-          .catch(() => {});
-      }
-    } catch {}
+        if (
+          url &&
+          String(url).includes(
+            '/tiktok/creator/manage/item_list/v1/'
+          )
+        ) {
+          response
+            .clone()
+            .json()
+            .then(
+              data =>
+                captureItemList(
+                  url,
+                  data
+                )
+            )
+            .catch(() => {});
+        }
+      } catch {}
 
-    return response;
-  };
+      return response;
+    };
 
-  // 监听页面 XMLHttpRequest
-  if (OriginalXHR?.prototype) {
+  if (
+    OriginalXHR?.prototype
+  ) {
     const originalOpen =
       OriginalXHR.prototype.open;
 
@@ -203,8 +332,13 @@
       OriginalXHR.prototype.send;
 
     OriginalXHR.prototype.open =
-      function (method, url, ...rest) {
-        this.__qualitellTikTokURL = url;
+      function (
+        method,
+        url,
+        ...rest
+      ) {
+        this.__qualitellTikTokURL =
+          url;
 
         return originalOpen.call(
           this,
@@ -251,13 +385,16 @@
     const entry =
       document.cookie
         .split('; ')
-        .find(cookie =>
-          cookie.startsWith(
-            'tt_csrf_token='
-          )
+        .find(
+          cookie =>
+            cookie.startsWith(
+              'tt_csrf_token='
+            )
         );
 
-    if (!entry) return '';
+    if (!entry) {
+      return '';
+    }
 
     const value =
       entry
@@ -274,46 +411,57 @@
     }
   }
 
-  async function fetchInsight(videoId) {
+  async function fetchInsight(
+    videoId
+  ) {
     const typeRequests = [
       {
-        insigh_type: 'video_info',
-        aweme_id: videoId
+        insigh_type:
+          'video_info',
+        aweme_id:
+          videoId
       },
       {
         insigh_type:
           'video_traffic_source_percent_realtime',
-        aweme_id: videoId
+        aweme_id:
+          videoId
       },
       {
         insigh_type:
           'video_retention_rate_realtime',
-        aweme_id: videoId
+        aweme_id:
+          videoId
       },
       {
         insigh_type:
           'video_view_realtime',
-        aweme_id: videoId
+        aweme_id:
+          videoId
       },
       {
         insigh_type:
           'video_total_duration_realtime',
-        aweme_id: videoId
+        aweme_id:
+          videoId
       },
       {
         insigh_type:
           'video_per_duration_realtime',
-        aweme_id: videoId
+        aweme_id:
+          videoId
       },
       {
         insigh_type:
           'video_finish_rate_realtime',
-        aweme_id: videoId
+        aweme_id:
+          videoId
       },
       {
         insigh_type:
           'video_new_follower_realtime',
-        aweme_id: videoId
+        aweme_id:
+          videoId
       }
     ];
 
@@ -335,20 +483,38 @@
 
     const params =
       new URLSearchParams({
-        locale: lang,
-        aid: '1988',
-        priority_region: 'US',
-        region: 'US',
-        tz_name: timezone,
+        locale:
+          lang,
+
+        aid:
+          '1988',
+
+        priority_region:
+          'US',
+
+        region:
+          'US',
+
+        tz_name:
+          timezone,
+
         app_name:
           'tiktok_creator_center',
-        app_language: lang,
+
+        app_language:
+          lang,
+
         device_platform:
           'web_pc',
+
         channel:
           'tiktok_web',
+
         tz_offset:
-          String(tzOffset),
+          String(
+            tzOffset
+          ),
+
         type_requests:
           JSON.stringify(
             typeRequests
@@ -364,17 +530,19 @@
     };
 
     if (csrf) {
-      headers['tt-csrf-token'] =
-        csrf;
+      headers[
+        'tt-csrf-token'
+      ] = csrf;
     }
 
     const response =
       await originalFetch(
         '/aweme/v2/data/insight/?' +
-          params.toString(),
+        params.toString(),
         {
           credentials:
             'include',
+
           headers
         }
       );
@@ -385,6 +553,7 @@
     return {
       httpStatus:
         response.status,
+
       data
     };
   }
@@ -396,24 +565,64 @@
     const hit =
       (list || []).find(
         item =>
-          String(item.timestamp) ===
-          String(milliseconds)
+          String(
+            item.timestamp
+          ) ===
+          String(
+            milliseconds
+          )
       );
 
     return hit
-      ? Number(hit.value)
+      ? Number(
+          hit.value
+        )
       : '';
   }
 
-  function trafficToObject(list) {
+  function trafficToObject(
+    list
+  ) {
     const result = {};
 
-    for (const item of list || []) {
-      result[item.key] =
-        Number(item.value);
+    for (
+      const item of list || []
+    ) {
+      result[
+        item.key
+      ] =
+        Number(
+          item.value
+        );
     }
 
     return result;
+  }
+
+  function getVideoUrl(row) {
+    const account =
+      String(
+        row?.account || ''
+      ).replace(
+        /^@/,
+        ''
+      );
+
+    const videoId =
+      String(
+        row?.video_id || ''
+      );
+
+    if (
+      !account ||
+      !videoId
+    ) {
+      return '';
+    }
+
+    return (
+      `https://www.tiktok.com/@${account}/video/${videoId}`
+    );
   }
 
   function normalizeRow(
@@ -445,7 +654,8 @@
 
     const durationMs =
       Number(
-        videoInfo.video?.duration ||
+        videoInfo.video
+          ?.duration ||
         item.duration ||
         0
       );
@@ -566,8 +776,10 @@
           averageWatch !== '' &&
           durationSec
         )
-          ? averageWatch /
-            durationSec
+          ? (
+              averageWatch /
+              durationSec
+            )
           : '',
 
       finish_rate:
@@ -666,17 +878,23 @@
 
   function getRangeDays() {
     const value =
-      $('qtk-range')?.value ||
+      $('qtk-range')
+        ?.value ||
       '7';
 
-    return value === 'all'
+    return value ===
+      'all'
       ? null
-      : Number(value);
+      : Number(
+          value
+        );
   }
 
   function getAnalysisRows() {
     const rows =
-      [...detailRows.values()];
+      [
+        ...detailRows.values()
+      ];
 
     const days =
       getRangeDays();
@@ -843,8 +1061,10 @@
         '互动率'
     };
 
-    return map[metric] ||
-      metric;
+    return (
+      map[metric] ||
+      metric
+    );
   }
 
   function metricDisplay(
@@ -866,18 +1086,14 @@
         'retention_1s',
         'retention_3s',
         'engagement_rate'
-      ].includes(
-        metric
-      )
+      ].includes(metric)
     ) {
       return pct(
         Number(value)
       );
     }
 
-    return String(
-      value
-    );
+    return String(value);
   }
 
   function buildSignals(rows) {
@@ -917,9 +1133,7 @@
       );
 
     const medViews =
-      median(
-        views
-      );
+      median(views);
 
     const q75R3 =
       quantile(
@@ -941,7 +1155,7 @@
               r.views
             ) &&
             r.views >=
-              q80Views
+            q80Views
         )
         .sort(
           (a, b) =>
@@ -964,9 +1178,9 @@
               r.views
             ) &&
             r.retention_3s >=
-              q75R3 &&
+            q75R3 &&
             r.views <=
-              medViews
+            medViews
         )
         .sort(
           (a, b) =>
@@ -986,7 +1200,7 @@
               r.retention_3s
             ) &&
             r.retention_3s <=
-              q25R3
+            q25R3
         )
         .sort(
           (a, b) =>
@@ -1011,8 +1225,7 @@
   ) {
     const clean =
       String(
-        title ||
-        ''
+        title || ''
       )
         .replace(
           /\s+/g,
@@ -1020,19 +1233,22 @@
         )
         .trim();
 
-    return clean.length >
-      max
-      ? clean.slice(
-          0,
-          max
-        ) + '…'
-      : clean;
+    return (
+      clean.length > max
+        ? (
+            clean.slice(
+              0,
+              max
+            ) +
+            '…'
+          )
+        : clean
+    );
   }
 
   function escapeHtml(str) {
     return String(
-      str ??
-      ''
+      str ?? ''
     )
       .replace(
         /&/g,
@@ -1060,9 +1276,7 @@
     rows,
     metric
   ) {
-    if (
-      !rows.length
-    ) {
+    if (!rows.length) {
       return `
         <div class="qtk-empty">
           当前范围暂无已采集公开视频。
@@ -1077,9 +1291,7 @@
         5
       );
 
-    if (
-      !list.length
-    ) {
+    if (!list.length) {
       return `
         <div class="qtk-empty">
           此指标暂无数据。
@@ -1129,9 +1341,7 @@
     rows,
     mode
   ) {
-    if (
-      !rows.length
-    ) {
+    if (!rows.length) {
       return '';
     }
 
@@ -1164,12 +1374,15 @@
 
             return `
               <div class="qtk-signal-item">
+
                 <span>
                   ${escapeHtml(shortTitle(r.title, 34))}
                 </span>
+
                 <b>
                   ${tag}
                 </b>
+
               </div>
             `;
           }
@@ -1201,41 +1414,45 @@
     const rows =
       getAnalysisRows();
 
-    const s =
-      summaryFor(
-        rows
-      );
+    const summary =
+      summaryFor(rows);
 
-    $('qtk-summary-count').textContent =
-      s.count || 0;
+    $('qtk-summary-count')
+      .textContent =
+      summary.count || 0;
 
-    $('qtk-summary-avg').textContent =
-      s.avgViews === ''
+    $('qtk-summary-avg')
+      .textContent =
+      summary.avgViews === ''
         ? '-'
         : Math.round(
-            s.avgViews
+            summary.avgViews
           );
 
-    $('qtk-summary-median').textContent =
-      s.medianViews === ''
+    $('qtk-summary-median')
+      .textContent =
+      summary.medianViews === ''
         ? '-'
         : Math.round(
-            s.medianViews
+            summary.medianViews
           );
 
-    $('qtk-summary-finish').textContent =
+    $('qtk-summary-finish')
+      .textContent =
       pct(
-        s.avgFinish
+        summary.avgFinish
       );
 
-    $('qtk-summary-watch').textContent =
+    $('qtk-summary-watch')
+      .textContent =
       pct(
-        s.avgWatchRatio
+        summary.avgWatchRatio
       );
 
-    $('qtk-summary-r3').textContent =
+    $('qtk-summary-r3')
+      .textContent =
       pct(
-        s.avgR3
+        summary.avgR3
       );
 
     const metric =
@@ -1243,35 +1460,37 @@
         ?.value ||
       'views';
 
-    $('qtk-top-list').innerHTML =
+    $('qtk-top-list')
+      .innerHTML =
       renderTopList(
         rows,
         metric
       );
 
     const signals =
-      buildSignals(
-        rows
-      );
+      buildSignals(rows);
 
-    $('qtk-signals').innerHTML =
-      renderSignalBlock(
-        '高播放样本（本期前20%）',
-        '🔥',
-        signals.high,
-        'high'
-      ) +
-      renderSignalBlock(
-        '高留存但播放一般',
-        '👀',
-        signals.hidden,
-        'hidden'
-      ) +
-      renderSignalBlock(
-        '3秒留存较弱（本期后25%）',
-        '⚠️',
-        signals.weak,
-        'weak'
+    $('qtk-signals')
+      .innerHTML =
+      (
+        renderSignalBlock(
+          '高播放样本（本期前20%）',
+          '🔥',
+          signals.high,
+          'high'
+        ) +
+        renderSignalBlock(
+          '高留存但播放一般',
+          '👀',
+          signals.hidden,
+          'hidden'
+        ) +
+        renderSignalBlock(
+          '3秒留存较弱（本期后25%）',
+          '⚠️',
+          signals.weak,
+          'weak'
+        )
       );
   }
 
@@ -1303,35 +1522,23 @@
         right:18px;
         bottom:18px;
         z-index:2147483647;
-
         width:390px;
         max-height:88vh;
-
         overflow:hidden;
-
         background:rgba(22,22,26,.985);
         color:#fff;
-
         border:1px solid rgba(255,255,255,.12);
         border-radius:14px;
-
         box-shadow:0 15px 45px rgba(0,0,0,.38);
-
-        font-family:
-          Arial,
-          "Microsoft YaHei",
-          sans-serif;
+        font-family:Arial,"Microsoft YaHei",sans-serif;
       }
 
       .qtk-header {
         display:flex;
         justify-content:space-between;
         align-items:center;
-
         padding:13px 15px;
-
-        border-bottom:
-          1px solid rgba(255,255,255,.08);
+        border-bottom:1px solid rgba(255,255,255,.08);
       }
 
       .qtk-title {
@@ -1341,50 +1548,35 @@
 
       .qtk-version {
         margin-top:3px;
-
         font-size:11px;
-
-        color:
-          rgba(255,255,255,.52);
+        color:rgba(255,255,255,.52);
       }
 
       .qtk-minimize {
         border:0;
-
         background:transparent;
-
         color:#fff;
-
         font-size:20px;
-
         cursor:pointer;
       }
 
       #qtk-body {
-        max-height:
-          calc(88vh - 56px);
-
+        max-height:calc(88vh - 56px);
         overflow:auto;
-
-        padding:
-          13px 15px 16px;
+        padding:13px 15px 16px;
       }
 
       .qtk-row {
         display:flex;
         align-items:center;
         justify-content:space-between;
-
         gap:12px;
-
         padding:4px 0;
-
         font-size:12px;
       }
 
       .qtk-row span {
-        color:
-          rgba(255,255,255,.62);
+        color:rgba(255,255,255,.62);
       }
 
       .qtk-row b {
@@ -1394,26 +1586,18 @@
 
       .qtk-toolbar {
         display:grid;
-
-        grid-template-columns:
-          1fr 1fr;
-
+        grid-template-columns:1fr 1fr;
         gap:7px;
-
         margin-top:10px;
       }
 
       .qtk-toolbar button,
-      .qtk-toolbar select,
       .qtk-select {
         width:100%;
         min-height:34px;
-
         border:0;
         border-radius:8px;
-
         padding:8px 9px;
-
         font-size:12px;
       }
 
@@ -1432,11 +1616,7 @@
         color:#111;
       }
 
-      #qtk-export-xlsx {
-        background:#fff;
-        color:#111;
-      }
-
+      #qtk-export-xlsx,
       #qtk-export-csv {
         background:#fff;
         color:#111;
@@ -1454,33 +1634,22 @@
 
       .qtk-progress {
         height:7px;
-
-        background:
-          rgba(255,255,255,.1);
-
+        background:rgba(255,255,255,.1);
         border-radius:999px;
-
         margin-top:10px;
-
         overflow:hidden;
       }
 
       #qtk-progress-bar {
         height:100%;
         width:0%;
-
         background:#25f4ee;
-
-        transition:
-          width .2s ease;
+        transition:width .2s ease;
       }
 
       .qtk-divider {
         height:1px;
-
-        background:
-          rgba(255,255,255,.08);
-
+        background:rgba(255,255,255,.08);
         margin:13px 0;
       }
 
@@ -1488,48 +1657,34 @@
         display:flex;
         justify-content:space-between;
         align-items:center;
-
         font-size:13px;
         font-weight:700;
-
         margin-bottom:8px;
       }
 
       .qtk-select {
         background:#303036;
         color:#fff;
-
         outline:none;
       }
 
       .qtk-summary-grid {
         display:grid;
-
-        grid-template-columns:
-          repeat(3,1fr);
-
+        grid-template-columns:repeat(3,1fr);
         gap:7px;
       }
 
       .qtk-card {
         background:#2a2a30;
-
-        border:
-          1px solid rgba(255,255,255,.06);
-
+        border:1px solid rgba(255,255,255,.06);
         border-radius:9px;
-
         padding:9px;
       }
 
       .qtk-card span {
         display:block;
-
         font-size:10px;
-
-        color:
-          rgba(255,255,255,.5);
-
+        color:rgba(255,255,255,.5);
         margin-bottom:5px;
       }
 
@@ -1540,42 +1695,29 @@
 
       .qtk-rank-controls {
         display:grid;
-
         grid-template-columns:1fr;
-
         gap:7px;
-
-        margin:
-          10px 0 7px;
+        margin:10px 0 7px;
       }
 
       .qtk-top-item {
         display:flex;
         align-items:center;
-
         gap:8px;
-
         padding:7px 0;
-
-        border-bottom:
-          1px solid rgba(255,255,255,.06);
+        border-bottom:1px solid rgba(255,255,255,.06);
       }
 
       .qtk-rank {
         width:20px;
         height:20px;
-
         border-radius:6px;
-
         background:#34343b;
-
         display:flex;
         align-items:center;
         justify-content:center;
-
         font-size:11px;
         font-weight:700;
-
         flex:none;
       }
 
@@ -1586,7 +1728,6 @@
 
       .qtk-top-title {
         font-size:11px;
-
         white-space:nowrap;
         overflow:hidden;
         text-overflow:ellipsis;
@@ -1594,47 +1735,35 @@
 
       .qtk-top-meta {
         margin-top:3px;
-
         font-size:9px;
-
-        color:
-          rgba(255,255,255,.45);
+        color:rgba(255,255,255,.45);
       }
 
       .qtk-top-value {
         font-size:11px;
         font-weight:700;
-
         color:#25f4ee;
-
         flex:none;
       }
 
       .qtk-signal-block {
         margin-top:9px;
-
         padding:9px;
-
         background:#26262c;
-
         border-radius:9px;
       }
 
       .qtk-signal-head {
         font-size:11px;
         font-weight:700;
-
         margin-bottom:6px;
       }
 
       .qtk-signal-item {
         display:flex;
         justify-content:space-between;
-
         gap:10px;
-
         padding:4px 0;
-
         font-size:10px;
       }
 
@@ -1646,39 +1775,28 @@
 
       .qtk-signal-item b {
         flex:none;
-
         font-weight:600;
-
-        color:
-          rgba(255,255,255,.65);
+        color:rgba(255,255,255,.65);
       }
 
       .qtk-empty {
         font-size:11px;
-
-        color:
-          rgba(255,255,255,.45);
-
+        color:rgba(255,255,255,.45);
         padding:8px 0;
       }
 
       .qtk-tip {
         margin-top:10px;
-
         font-size:10px;
         line-height:1.5;
-
-        color:
-          rgba(255,255,255,.42);
+        color:rgba(255,255,255,.42);
       }
     `;
 
     (
       document.head ||
       document.documentElement
-    ).appendChild(
-      style
-    );
+    ).appendChild(style);
   }
 
   function buildPanel() {
@@ -1878,7 +1996,6 @@
               id="qtk-rank-metric"
               class="qtk-select"
             >
-
               <option value="views">
                 播放 TOP
               </option>
@@ -1912,9 +2029,11 @@
           </div>
 
           <div id="qtk-top-list">
+
             <div class="qtk-empty">
               采集数据后显示排名。
             </div>
+
           </div>
 
           <div id="qtk-signals"></div>
@@ -1922,9 +2041,8 @@
         </div>
 
         <div class="qtk-tip">
-          V0.3 分析按当前选择的时间范围计算；
-          排名与“高/低”均基于同一期公开视频相对表现，
-          不使用固定爆款阈值。
+          V0.3.1 分析按当前选择的时间范围计算；
+          XLSX 中原始数据及本期分析的视频标题均可直接点击打开对应 TikTok 视频。
         </div>
 
       </div>
@@ -1932,9 +2050,7 @@
 
     document
       .documentElement
-      .appendChild(
-        panel
-      );
+      .appendChild(panel);
 
     $('qtk-minimize')
       .addEventListener(
@@ -2022,13 +2138,11 @@
 
     $('qtk-scheduled')
       .textContent =
-      scheduledItems()
-        .length;
+      scheduledItems().length;
 
     $('qtk-candidates')
       .textContent =
-      candidateItems()
-        .length;
+      candidateItems().length;
 
     $('qtk-public')
       .textContent =
@@ -2056,16 +2170,18 @@
     $('qtk-fetch')
       .disabled =
       busy ||
-      candidateItems()
-        .length === 0;
+      candidateItems().length ===
+        0;
 
     $('qtk-export-xlsx')
       .disabled =
-      detailRows.size === 0;
+      detailRows.size ===
+      0;
 
     $('qtk-export-csv')
       .disabled =
-      detailRows.size === 0;
+      detailRows.size ===
+      0;
 
     renderAnalysis();
   }
@@ -2106,9 +2222,7 @@
           'smooth'
       });
 
-      await sleep(
-        850
-      );
+      await sleep(850);
 
       const newCount =
         items.size;
@@ -2119,10 +2233,8 @@
           .scrollHeight;
 
       if (
-        newCount ===
-          lastCount &&
-        newHeight ===
-          lastHeight
+        newCount === lastCount &&
+        newHeight === lastHeight
       ) {
         stableRounds++;
       } else {
@@ -2140,8 +2252,7 @@
       );
 
       if (
-        stableRounds >=
-        6
+        stableRounds >= 6
       ) {
         break;
       }
@@ -2227,7 +2338,6 @@
               insight
             )
           );
-
         } else if (
           privateStatus ===
             null ||
@@ -2237,7 +2347,6 @@
           unknownIds.add(
             videoId
           );
-
         } else {
           privateIds.add(
             videoId
@@ -2263,8 +2372,8 @@
           list.length
             ? Math.round(
                 completed /
-                  list.length *
-                  100
+                list.length *
+                100
               )
             : 0
         }%`;
@@ -2273,9 +2382,7 @@
         `详情 ${completed}/${list.length}`
       );
 
-      await sleep(
-        800
-      );
+      await sleep(800);
     }
 
     busy = false;
@@ -2312,126 +2419,36 @@
   }
 
   const exportColumns = [
-    [
-      '账号',
-      'account'
-    ],
-    [
-      '昵称',
-      'nickname'
-    ],
-    [
-      'Video ID',
-      'video_id'
-    ],
-    [
-      '标题',
-      'title'
-    ],
-    [
-      '发布时间',
-      'publish_time'
-    ],
-    [
-      '视频时长(s)',
-      'duration_sec'
-    ],
-    [
-      '播放量',
-      'views'
-    ],
-    [
-      '点赞',
-      'likes'
-    ],
-    [
-      '评论',
-      'comments'
-    ],
-    [
-      '分享',
-      'shares'
-    ],
-    [
-      '收藏',
-      'favorites'
-    ],
-    [
-      '新增粉丝',
-      'new_followers'
-    ],
-    [
-      '平均观看时间(s)',
-      'avg_watch_sec'
-    ],
-    [
-      '观看倍率',
-      'watch_ratio'
-    ],
-    [
-      '完播率',
-      'finish_rate'
-    ],
-    [
-      '总观看时间(s)',
-      'total_watch_sec'
-    ],
-    [
-      '1秒留存',
-      'retention_1s'
-    ],
-    [
-      '2秒留存',
-      'retention_2s'
-    ],
-    [
-      '3秒留存',
-      'retention_3s'
-    ],
-    [
-      '5秒留存',
-      'retention_5s'
-    ],
-    [
-      '10秒留存',
-      'retention_10s'
-    ],
-    [
-      'For You',
-      'for_you'
-    ],
-    [
-      '个人主页',
-      'personal_profile'
-    ],
-    [
-      '搜索',
-      'search'
-    ],
-    [
-      '关注',
-      'follow'
-    ],
-    [
-      '私信',
-      'direct_message'
-    ],
-    [
-      '音乐',
-      'sound'
-    ],
-    [
-      '其它',
-      'others'
-    ],
-    [
-      '点赞率',
-      'like_rate'
-    ],
-    [
-      '互动率',
-      'engagement_rate'
-    ]
+    ['账号', 'account'],
+    ['昵称', 'nickname'],
+    ['Video ID', 'video_id'],
+    ['标题', 'title'],
+    ['发布时间', 'publish_time'],
+    ['视频时长(s)', 'duration_sec'],
+    ['播放量', 'views'],
+    ['点赞', 'likes'],
+    ['评论', 'comments'],
+    ['分享', 'shares'],
+    ['收藏', 'favorites'],
+    ['新增粉丝', 'new_followers'],
+    ['平均观看时间(s)', 'avg_watch_sec'],
+    ['观看倍率', 'watch_ratio'],
+    ['完播率', 'finish_rate'],
+    ['总观看时间(s)', 'total_watch_sec'],
+    ['1秒留存', 'retention_1s'],
+    ['2秒留存', 'retention_2s'],
+    ['3秒留存', 'retention_3s'],
+    ['5秒留存', 'retention_5s'],
+    ['10秒留存', 'retention_10s'],
+    ['For You', 'for_you'],
+    ['个人主页', 'personal_profile'],
+    ['搜索', 'search'],
+    ['关注', 'follow'],
+    ['私信', 'direct_message'],
+    ['音乐', 'sound'],
+    ['其它', 'others'],
+    ['点赞率', 'like_rate'],
+    ['互动率', 'engagement_rate']
   ];
 
   const percentKeys =
@@ -2456,21 +2473,27 @@
 
   function exportCsv() {
     const rows =
-      [...detailRows.values()];
+      [
+        ...detailRows.values()
+      ];
 
-    if (
-      !rows.length
-    ) {
+    if (!rows.length) {
       return;
     }
 
+    const columns = [
+      ...exportColumns,
+      [
+        '视频链接',
+        '__video_url'
+      ]
+    ];
+
     const lines = [
-      exportColumns
+      columns
         .map(
           ([label]) =>
-            csvEscape(
-              label
-            )
+            csvEscape(label)
         )
         .join(',')
     ];
@@ -2479,10 +2502,19 @@
       const row of rows
     ) {
       lines.push(
-        exportColumns
+        columns
           .map(
-            ([, key]) =>
-              csvEscape(
+            ([, key]) => {
+              if (
+                key ===
+                '__video_url'
+              ) {
+                return csvEscape(
+                  getVideoUrl(row)
+                );
+              }
+
+              return csvEscape(
                 percentKeys.has(
                   key
                 )
@@ -2490,7 +2522,8 @@
                       row[key]
                     )
                   : row[key]
-              )
+              );
+            }
           )
           .join(',')
       );
@@ -2521,7 +2554,8 @@
       );
 
     const account =
-      rows[0]?.account ||
+      rows[0]
+        ?.account ||
       'tiktok';
 
     const date =
@@ -2532,8 +2566,7 @@
           10
         );
 
-    link.href =
-      url;
+    link.href = url;
 
     link.download =
       `${account}_TikTok公开视频数据_${date}.csv`;
@@ -2556,7 +2589,9 @@
     );
   }
 
-  function buildRawSheetRows(rows) {
+  function buildRawSheetRows(
+    rows
+  ) {
     return rows.map(
       row => {
         const out = {};
@@ -2568,9 +2603,7 @@
           ] of exportColumns
         ) {
           out[label] =
-            percentKeys.has(
-              key
-            )
+            percentKeys.has(key)
               ? (
                   row[key] === ''
                     ? ''
@@ -2581,16 +2614,19 @@
               : row[key];
         }
 
+        out['视频链接'] =
+          getVideoUrl(row);
+
         return out;
       }
     );
   }
 
-  function buildAnalysisSheetRows(rows) {
-    const s =
-      summaryFor(
-        rows
-      );
+  function buildAnalysisSheetRows(
+    rows
+  ) {
+    const summary =
+      summaryFor(rows);
 
     const metric =
       $('qtk-rank-metric')
@@ -2605,91 +2641,244 @@
       );
 
     const signals =
-      buildSignals(
-        rows
-      );
+      buildSignals(rows);
 
     const rangeLabel =
       $('qtk-range')
         ?.selectedOptions
         ?.[0]
-        ?.textContent ||
+        ?.textContent
+        ?.trim() ||
       '最近7天';
 
     const result = [
       {
         项目:
           '统计范围',
+
         数值:
-          rangeLabel
+          rangeLabel,
+
+        播放:
+          '',
+
+        完播率:
+          '',
+
+        三秒留存:
+          '',
+
+        视频链接:
+          ''
       },
+
       {
         项目:
           '公开视频数',
+
         数值:
-          s.count
+          summary.count,
+
+        播放:
+          '',
+
+        完播率:
+          '',
+
+        三秒留存:
+          '',
+
+        视频链接:
+          ''
       },
+
       {
         项目:
           '平均播放',
+
         数值:
-          s.avgViews === ''
+          summary.avgViews === ''
             ? ''
             : Math.round(
-                s.avgViews
-              )
+                summary.avgViews
+              ),
+
+        播放:
+          '',
+
+        完播率:
+          '',
+
+        三秒留存:
+          '',
+
+        视频链接:
+          ''
       },
+
       {
         项目:
           '中位播放',
+
         数值:
-          s.medianViews === ''
+          summary.medianViews === ''
             ? ''
             : Math.round(
-                s.medianViews
-              )
+                summary.medianViews
+              ),
+
+        播放:
+          '',
+
+        完播率:
+          '',
+
+        三秒留存:
+          '',
+
+        视频链接:
+          ''
       },
+
       {
         项目:
           '平均完播率',
+
         数值:
-          s.avgFinish
+          summary.avgFinish,
+
+        播放:
+          '',
+
+        完播率:
+          '',
+
+        三秒留存:
+          '',
+
+        视频链接:
+          ''
       },
+
       {
         项目:
           '平均观看倍率',
+
         数值:
-          s.avgWatchRatio
+          summary.avgWatchRatio,
+
+        播放:
+          '',
+
+        完播率:
+          '',
+
+        三秒留存:
+          '',
+
+        视频链接:
+          ''
       },
+
       {
         项目:
           '平均1秒留存',
+
         数值:
-          s.avgR1
+          summary.avgR1,
+
+        播放:
+          '',
+
+        完播率:
+          '',
+
+        三秒留存:
+          '',
+
+        视频链接:
+          ''
       },
+
       {
         项目:
           '平均2秒留存',
+
         数值:
-          s.avgR2
+          summary.avgR2,
+
+        播放:
+          '',
+
+        完播率:
+          '',
+
+        三秒留存:
+          '',
+
+        视频链接:
+          ''
       },
+
       {
         项目:
           '平均3秒留存',
+
         数值:
-          s.avgR3
+          summary.avgR3,
+
+        播放:
+          '',
+
+        完播率:
+          '',
+
+        三秒留存:
+          '',
+
+        视频链接:
+          ''
       },
+
       {
         项目:
           '平均5秒留存',
+
         数值:
-          s.avgR5
+          summary.avgR5,
+
+        播放:
+          '',
+
+        完播率:
+          '',
+
+        三秒留存:
+          '',
+
+        视频链接:
+          ''
       },
+
       {},
+
       {
         项目:
           `${metricLabel(metric)} TOP 5`,
+
         数值:
+          '',
+
+        播放:
+          '',
+
+        完播率:
+          '',
+
+        三秒留存:
+          '',
+
+        视频链接:
           ''
       }
     ];
@@ -2698,7 +2887,10 @@
       (r, i) =>
         result.push({
           项目:
-            `${i + 1}. ${shortTitle(r.title, 55)}`,
+            `${i + 1}. ${shortTitle(
+              r.title,
+              55
+            )}`,
 
           数值:
             r[metric],
@@ -2710,7 +2902,10 @@
             r.finish_rate,
 
           三秒留存:
-            r.retention_3s
+            r.retention_3s,
+
+          视频链接:
+            getVideoUrl(r)
         })
     );
 
@@ -2719,7 +2914,20 @@
       {
         项目:
           '高播放样本（本期前20%）',
+
         数值:
+          '',
+
+        播放:
+          '',
+
+        完播率:
+          '',
+
+        三秒留存:
+          '',
+
+        视频链接:
           ''
       }
     );
@@ -2736,11 +2944,17 @@
           数值:
             r.views,
 
+          播放:
+            r.views,
+
           完播率:
             r.finish_rate,
 
           三秒留存:
-            r.retention_3s
+            r.retention_3s,
+
+          视频链接:
+            getVideoUrl(r)
         })
     );
 
@@ -2749,7 +2963,20 @@
       {
         项目:
           '高留存但播放一般',
+
         数值:
+          '',
+
+        播放:
+          '',
+
+        完播率:
+          '',
+
+        三秒留存:
+          '',
+
+        视频链接:
           ''
       }
     );
@@ -2766,11 +2993,17 @@
           数值:
             r.views,
 
+          播放:
+            r.views,
+
           完播率:
             r.finish_rate,
 
           三秒留存:
-            r.retention_3s
+            r.retention_3s,
+
+          视频链接:
+            getVideoUrl(r)
         })
     );
 
@@ -2779,7 +3012,20 @@
       {
         项目:
           '3秒留存较弱（本期后25%）',
+
         数值:
+          '',
+
+        播放:
+          '',
+
+        完播率:
+          '',
+
+        三秒留存:
+          '',
+
+        视频链接:
           ''
       }
     );
@@ -2803,16 +3049,226 @@
             r.finish_rate,
 
           三秒留存:
-            r.retention_3s
+            r.retention_3s,
+
+          视频链接:
+            getVideoUrl(r)
         })
     );
 
     return result;
   }
 
+  function applyHyperlinks(
+    worksheet,
+    linkColumnName,
+    titleColumnName
+  ) {
+    if (
+      !worksheet ||
+      !worksheet['!ref']
+    ) {
+      return;
+    }
+
+    const range =
+      XLSX.utils.decode_range(
+        worksheet['!ref']
+      );
+
+    const headerMap = {};
+
+    for (
+      let col = range.s.c;
+      col <= range.e.c;
+      col++
+    ) {
+      const address =
+        XLSX.utils.encode_cell({
+          r: 0,
+          c: col
+        });
+
+      const cell =
+        worksheet[address];
+
+      if (
+        cell &&
+        cell.v !== undefined
+      ) {
+        headerMap[
+          String(cell.v)
+        ] = col;
+      }
+    }
+
+    const linkCol =
+      headerMap[
+        linkColumnName
+      ];
+
+    if (
+      linkCol === undefined
+    ) {
+      return;
+    }
+
+    const titleCol =
+      titleColumnName
+        ? headerMap[
+            titleColumnName
+          ]
+        : undefined;
+
+    for (
+      let row = 1;
+      row <= range.e.r;
+      row++
+    ) {
+      const linkAddress =
+        XLSX.utils.encode_cell({
+          r: row,
+          c: linkCol
+        });
+
+      const linkCell =
+        worksheet[
+          linkAddress
+        ];
+
+      const url =
+        linkCell?.v;
+
+      if (
+        !url ||
+        !String(
+          url
+        ).startsWith(
+          'https://'
+        )
+      ) {
+        continue;
+      }
+
+      linkCell.l = {
+        Target:
+          String(url),
+
+        Tooltip:
+          '打开 TikTok 视频'
+      };
+
+      if (
+        titleCol !== undefined
+      ) {
+        const titleAddress =
+          XLSX.utils.encode_cell({
+            r: row,
+            c: titleCol
+          });
+
+        const titleCell =
+          worksheet[
+            titleAddress
+          ];
+
+        if (titleCell) {
+          titleCell.l = {
+            Target:
+              String(url),
+
+            Tooltip:
+              '打开 TikTok 视频'
+          };
+        }
+      }
+    }
+  }
+
+  function applyPercentFormats(
+    worksheet,
+    headerNames
+  ) {
+    if (
+      !worksheet ||
+      !worksheet['!ref']
+    ) {
+      return;
+    }
+
+    const range =
+      XLSX.utils.decode_range(
+        worksheet['!ref']
+      );
+
+    const headerMap = {};
+
+    for (
+      let col = range.s.c;
+      col <= range.e.c;
+      col++
+    ) {
+      const address =
+        XLSX.utils.encode_cell({
+          r: 0,
+          c: col
+        });
+
+      const cell =
+        worksheet[address];
+
+      if (cell?.v !== undefined) {
+        headerMap[
+          String(cell.v)
+        ] = col;
+      }
+    }
+
+    for (
+      const header of headerNames
+    ) {
+      const col =
+        headerMap[header];
+
+      if (
+        col === undefined
+      ) {
+        continue;
+      }
+
+      for (
+        let row = 1;
+        row <= range.e.r;
+        row++
+      ) {
+        const address =
+          XLSX.utils.encode_cell({
+            r: row,
+            c: col
+          });
+
+        const cell =
+          worksheet[
+            address
+          ];
+
+        if (
+          cell &&
+          typeof cell.v ===
+            'number'
+        ) {
+          cell.z =
+            '0.0%';
+        }
+      }
+    }
+  }
+
   function exportXlsx() {
     const allRows =
-      [...detailRows.values()]
+      [
+        ...detailRows.values()
+      ]
         .sort(
           (a, b) =>
             b.publish_ts -
@@ -2833,37 +3289,58 @@
       'undefined'
     ) {
       alert(
-        'XLSX 组件未加载，请刷新页面后重试；也可以先导出 CSV。'
+        'XLSX 组件未加载，请刷新页面后重试。'
       );
 
       return;
     }
 
-    const wb =
-      XLSX.utils
-        .book_new();
+    const workbook =
+      XLSX.utils.book_new();
 
-    const wsRaw =
-      XLSX.utils
-        .json_to_sheet(
-          buildRawSheetRows(
-            allRows
-          )
-        );
+    const rawData =
+      buildRawSheetRows(
+        allRows
+      );
 
-    const wsAnalysis =
-      XLSX.utils
-        .json_to_sheet(
-          buildAnalysisSheetRows(
-            analysisRows
-          )
-        );
+    const rawSheet =
+      XLSX.utils.json_to_sheet(
+        rawData
+      );
 
-    wsRaw['!cols'] = [
+    applyHyperlinks(
+      rawSheet,
+      '视频链接',
+      '标题'
+    );
+
+    applyPercentFormats(
+      rawSheet,
+      [
+        '观看倍率',
+        '完播率',
+        '1秒留存',
+        '2秒留存',
+        '3秒留存',
+        '5秒留存',
+        '10秒留存',
+        'For You',
+        '个人主页',
+        '搜索',
+        '关注',
+        '私信',
+        '音乐',
+        '其它',
+        '点赞率',
+        '互动率'
+      ]
+    );
+
+    rawSheet['!cols'] = [
       { wch: 18 },
       { wch: 18 },
-      { wch: 21 },
-      { wch: 60 },
+      { wch: 22 },
+      { wch: 62 },
       { wch: 22 },
       { wch: 13 },
       { wch: 10 },
@@ -2872,31 +3349,71 @@
       { wch: 8 },
       { wch: 8 },
       { wch: 10 },
-      { wch: 16 },
-      { wch: 12 },
-      { wch: 11 },
-      { wch: 16 }
-    ];
-
-    wsAnalysis['!cols'] = [
-      { wch: 62 },
       { wch: 18 },
       { wch: 12 },
       { wch: 12 },
-      { wch: 12 }
+      { wch: 16 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 58 }
+    ];
+
+    const analysisData =
+      buildAnalysisSheetRows(
+        analysisRows
+      );
+
+    const analysisSheet =
+      XLSX.utils.json_to_sheet(
+        analysisData
+      );
+
+    applyHyperlinks(
+      analysisSheet,
+      '视频链接',
+      '项目'
+    );
+
+    applyPercentFormats(
+      analysisSheet,
+      [
+        '完播率',
+        '三秒留存'
+      ]
+    );
+
+    analysisSheet['!cols'] = [
+      { wch: 64 },
+      { wch: 18 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 58 }
     ];
 
     XLSX.utils
       .book_append_sheet(
-        wb,
-        wsRaw,
+        workbook,
+        rawSheet,
         '原始数据'
       );
 
     XLSX.utils
       .book_append_sheet(
-        wb,
-        wsAnalysis,
+        workbook,
+        analysisSheet,
         '本期分析'
       );
 
@@ -2914,7 +3431,7 @@
         );
 
     XLSX.writeFile(
-      wb,
+      workbook,
       `${account}_TikTok周报_${date}.xlsx`
     );
   }
