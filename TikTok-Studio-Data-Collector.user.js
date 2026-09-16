@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         TikTok Studio 数据采集器
 // @namespace    qualitell.tiktok.collector
-// @version      0.3.6
-// @description  TikTok Studio 自动显示完播率、观看倍率、1s/3s留存、新增粉丝和互动率；预约视频不采集，按 Video ID 精确匹配。
+// @version      0.3.7
+// @description  TikTok Studio 自动显示完播率、观看倍率、1s/3s留存、新增粉丝和互动率；预约视频不采集；支持 XLSX/CSV。
 // @author       Qualitell
 // @homepageURL  https://github.com/piboss001/tiktok-studio-data-collector
 // @supportURL   https://github.com/piboss001/tiktok-studio-data-collector/issues
@@ -25,7 +25,7 @@
       ? unsafeWindow
       : window;
 
-  const VERSION = '0.3.6';
+  const VERSION = '0.3.7';
 
   const items = new Map();
   const detailRows = new Map();
@@ -38,14 +38,12 @@
 
   const coverCache = new Map();
 
+  let failedCount = 0;
   let busy = false;
   let minimized = false;
-  let failedCount = 0;
 
   let autoTimer = null;
   let observer = null;
-
-  let headerPositions = null;
 
   const originalFetch =
     page.fetch.bind(page);
@@ -69,9 +67,9 @@
     white: 'FFFFFFFF'
   };
 
-  /* =========================
-     基础
-  ========================= */
+  /* ========================================
+     基础工具
+  ======================================== */
 
   function num(value) {
     if (
@@ -89,7 +87,10 @@
       : n;
   }
 
-  function pct(value, digits = 1) {
+  function pct(
+    value,
+    digits = 1
+  ) {
     if (
       value === null ||
       value === undefined ||
@@ -100,34 +101,49 @@
 
     const n = Number(value);
 
-    if (!Number.isFinite(n)) {
+    if (
+      !Number.isFinite(n)
+    ) {
       return '-';
     }
 
-    return `${(n * 100).toFixed(digits)}%`;
+    return `${(
+      n * 100
+    ).toFixed(digits)}%`;
   }
 
-  function formatDate(timestamp) {
+  function formatDate(
+    timestamp
+  ) {
     if (!timestamp) {
       return '';
     }
 
     return new Date(
-      Number(timestamp) * 1000
-    ).toLocaleString('zh-CN');
+      Number(timestamp) *
+      1000
+    ).toLocaleString(
+      'zh-CN'
+    );
   }
 
-  function safeClone(value) {
+  function safeClone(
+    value
+  ) {
     try {
       return JSON.parse(
-        JSON.stringify(value)
+        JSON.stringify(
+          value
+        )
       );
     } catch {
       return null;
     }
   }
 
-  function csvEscape(value) {
+  function csvEscape(
+    value
+  ) {
     if (
       value === null ||
       value === undefined
@@ -138,45 +154,66 @@
     const text =
       String(value);
 
-    return /[",\n\r]/.test(text)
-      ? `"${text.replace(/"/g, '""')}"`
+    return /[",\n\r]/.test(
+      text
+    )
+      ? `"${text.replace(
+          /"/g,
+          '""'
+        )}"`
       : text;
   }
 
-  function mean(values) {
+  function mean(
+    values
+  ) {
     const arr =
       values.filter(
-        v =>
-          typeof v === 'number' &&
-          Number.isFinite(v)
+        value =>
+          typeof value ===
+            'number' &&
+          Number.isFinite(
+            value
+          )
       );
 
-    if (!arr.length) {
+    if (
+      !arr.length
+    ) {
       return '';
     }
 
     return (
       arr.reduce(
-        (a, b) => a + b,
+        (a, b) =>
+          a + b,
         0
       ) /
       arr.length
     );
   }
 
-  function median(values) {
+  function median(
+    values
+  ) {
     const arr =
       values
         .filter(
-          v =>
-            typeof v === 'number' &&
-            Number.isFinite(v)
+          value =>
+            typeof value ===
+              'number' &&
+            Number.isFinite(
+              value
+            )
         )
         .sort(
-          (a, b) => a - b
+          (a, b) =>
+            a - b
         );
 
-    if (!arr.length) {
+    if (
+      !arr.length
+    ) {
       return '';
     }
 
@@ -185,62 +222,134 @@
         arr.length / 2
       );
 
-    return arr.length % 2
-      ? arr[mid]
-      : (
-          arr[mid - 1] +
-          arr[mid]
-        ) / 2;
+    return (
+      arr.length % 2
+        ? arr[mid]
+        : (
+            arr[mid - 1] +
+            arr[mid]
+          ) / 2
+    );
+  }
+
+  function normalizeText(
+    text
+  ) {
+    return String(
+      text || ''
+    )
+      .replace(
+        /\s+/g,
+        ' '
+      )
+      .trim()
+      .toLowerCase();
   }
 
   function shortTitle(
     title,
     max = 34
   ) {
-    const clean =
-      String(title || '')
-        .replace(/\s+/g, ' ')
+    const text =
+      String(
+        title || ''
+      )
+        .replace(
+          /\s+/g,
+          ' '
+        )
         .trim();
 
-    return clean.length > max
-      ? clean.slice(0, max) + '…'
-      : clean;
+    return (
+      text.length > max
+        ? (
+            text.slice(
+              0,
+              max
+            ) +
+            '…'
+          )
+        : text
+    );
   }
 
-  function escapeHtml(str) {
-    return String(str ?? '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
+  function escapeHtml(
+    str
+  ) {
+    return String(
+      str ?? ''
+    )
+      .replace(
+        /&/g,
+        '&amp;'
+      )
+      .replace(
+        /</g,
+        '&lt;'
+      )
+      .replace(
+        />/g,
+        '&gt;'
+      )
+      .replace(
+        /"/g,
+        '&quot;'
+      )
+      .replace(
+        /'/g,
+        '&#039;'
+      );
   }
 
-  /* =========================
+  /* ========================================
      预约判断
-  ========================= */
+  ======================================== */
 
-  function isScheduled(item) {
+  function isScheduled(
+    item
+  ) {
     const now =
       Math.floor(
-        Date.now() / 1000
+        Date.now() /
+        1000
       );
 
     const postTime =
       Number(
-        item?.post_time || 0
+        item?.post_time ||
+        0
       );
 
     const scheduleTime =
       Number(
-        item?.schedule_time || 0
+        item?.schedule_time ||
+        0
       );
 
-    return (
-      Number(item?.status) === 140 ||
-      postTime > now + 60 ||
-      scheduleTime > now + 60
-    );
+    if (
+      scheduleTime >
+      now + 60
+    ) {
+      return true;
+    }
+
+    if (
+      postTime >
+      now + 60
+    ) {
+      return true;
+    }
+
+    if (
+      Number(
+        item?.status
+      ) === 140 &&
+      scheduleTime > 0
+    ) {
+      return true;
+    }
+
+    return false;
   }
 
   function candidateItems() {
@@ -260,9 +369,9 @@
     );
   }
 
-  /* =========================
+  /* ========================================
      捕获作品列表
-  ========================= */
+  ======================================== */
 
   function captureItemList(
     url,
@@ -270,9 +379,10 @@
   ) {
     if (
       !url ||
-      !String(url).includes(
-        '/tiktok/creator/manage/item_list/v1/'
-      )
+      !String(url)
+        .includes(
+          '/tiktok/creator/manage/item_list/v1/'
+        )
     ) {
       return;
     }
@@ -287,15 +397,22 @@
     }
 
     for (
-      const item of data.item_list
+      const item
+      of data.item_list
     ) {
-      if (!item?.item_id) {
+      if (
+        !item?.item_id
+      ) {
         continue;
       }
 
       items.set(
-        String(item.item_id),
-        safeClone(item)
+        String(
+          item.item_id
+        ),
+        safeClone(
+          item
+        )
       );
     }
 
@@ -306,8 +423,14 @@
     scheduleMetrics();
   }
 
+  /* ========================================
+     Hook fetch
+  ======================================== */
+
   page.fetch =
-    async function (...args) {
+    async function (
+      ...args
+    ) {
       const response =
         await originalFetch(
           ...args
@@ -318,15 +441,17 @@
           args[0];
 
         const url =
-          typeof input === 'string'
+          typeof input ===
+          'string'
             ? input
             : input?.url;
 
         if (
           url &&
-          String(url).includes(
-            '/tiktok/creator/manage/item_list/v1/'
-          )
+          String(url)
+            .includes(
+              '/tiktok/creator/manage/item_list/v1/'
+            )
         ) {
           response
             .clone()
@@ -338,23 +463,36 @@
                   data
                 )
             )
-            .catch(() => {});
+            .catch(
+              () => {}
+            );
         }
+
       } catch {}
 
       return response;
     };
 
+  /* ========================================
+     Hook XHR
+  ======================================== */
+
   if (
     OriginalXHR?.prototype
   ) {
     const originalOpen =
-      OriginalXHR.prototype.open;
+      OriginalXHR
+        .prototype
+        .open;
 
     const originalSend =
-      OriginalXHR.prototype.send;
+      OriginalXHR
+        .prototype
+        .send;
 
-    OriginalXHR.prototype.open =
+    OriginalXHR
+      .prototype
+      .open =
       function (
         method,
         url,
@@ -363,16 +501,21 @@
         this.__qtkUrl =
           url;
 
-        return originalOpen.call(
-          this,
-          method,
-          url,
-          ...rest
-        );
+        return originalOpen
+          .call(
+            this,
+            method,
+            url,
+            ...rest
+          );
       };
 
-    OriginalXHR.prototype.send =
-      function (...args) {
+    OriginalXHR
+      .prototype
+      .send =
+      function (
+        ...args
+      ) {
         this.addEventListener(
           'load',
           () => {
@@ -382,9 +525,10 @@
 
               if (
                 url &&
-                String(url).includes(
-                  '/tiktok/creator/manage/item_list/v1/'
-                )
+                String(url)
+                  .includes(
+                    '/tiktok/creator/manage/item_list/v1/'
+                  )
               ) {
                 captureItemList(
                   url,
@@ -393,20 +537,22 @@
                   )
                 );
               }
+
             } catch {}
           }
         );
 
-        return originalSend.apply(
-          this,
-          args
-        );
+        return originalSend
+          .apply(
+            this,
+            args
+          );
       };
   }
 
-  /* =========================
-     Insight API
-  ========================= */
+  /* ========================================
+     CSRF
+  ======================================== */
 
   function getCsrfToken() {
     const entry =
@@ -414,9 +560,10 @@
         .split('; ')
         .find(
           cookie =>
-            cookie.startsWith(
-              'tt_csrf_token='
-            )
+            cookie
+              .startsWith(
+                'tt_csrf_token='
+              )
         );
 
     if (!entry) {
@@ -438,10 +585,14 @@
     }
   }
 
+  /* ========================================
+     Insight API
+  ======================================== */
+
   async function fetchInsight(
     videoId
   ) {
-    const requests = [
+    const typeRequests = [
       'video_info',
       'video_traffic_source_percent_realtime',
       'video_retention_rate_realtime',
@@ -461,7 +612,9 @@
     );
 
     const lang =
-      document.documentElement.lang ||
+      document
+        .documentElement
+        .lang ||
       'zh-Hans';
 
     const timezone =
@@ -506,11 +659,13 @@
           'tiktok_web',
 
         tz_offset:
-          String(tzOffset),
+          String(
+            tzOffset
+          ),
 
         type_requests:
           JSON.stringify(
-            requests
+            typeRequests
           )
       });
 
@@ -525,7 +680,8 @@
     if (csrf) {
       headers[
         'tt-csrf-token'
-      ] = csrf;
+      ] =
+        csrf;
     }
 
     const response =
@@ -545,20 +701,23 @@
         response.status,
 
       data:
-        await response.json()
+        await response
+          .json()
     };
   }
 
-  /* =========================
-     数据整理
-  ========================= */
+  /* ========================================
+     Insight 数据整理
+  ======================================== */
 
   function retentionAt(
     list,
     milliseconds
   ) {
     const hit =
-      (list || []).find(
+      (
+        list || []
+      ).find(
         item =>
           String(
             item.timestamp
@@ -569,43 +728,55 @@
       );
 
     return hit
-      ? Number(hit.value)
+      ? Number(
+          hit.value
+        )
       : '';
   }
 
   function trafficObject(
     list
   ) {
-    const out = {};
+    const result = {};
 
     for (
-      const item of list || []
+      const item
+      of list || []
     ) {
-      out[item.key] =
-        Number(item.value);
+      result[
+        item.key
+      ] =
+        Number(
+          item.value
+        );
     }
 
-    return out;
+    return result;
   }
 
-  function extractUrl(value) {
+  function extractUrl(
+    value
+  ) {
     if (!value) {
       return '';
     }
 
     if (
-      typeof value === 'string'
+      typeof value ===
+      'string'
     ) {
       return value;
     }
 
     if (
-      Array.isArray(value)
+      Array.isArray(
+        value
+      )
     ) {
       return (
         value.find(
-          value =>
-            typeof value ===
+          item =>
+            typeof item ===
             'string'
         ) || ''
       );
@@ -617,7 +788,8 @@
       )
     ) {
       return (
-        value.url_list[0] ||
+        value
+          .url_list[0] ||
         ''
       );
     }
@@ -634,25 +806,29 @@
 
   function pickCoverUrl(
     item,
-    videoInfo
+    info
   ) {
-    const candidates = [
+    const values = [
       item?.cover_url,
       item?.cover,
       item?.video?.cover,
       item?.video?.origin_cover,
       item?.video?.dynamic_cover,
-      videoInfo?.cover,
-      videoInfo?.video?.cover,
-      videoInfo?.video?.origin_cover,
-      videoInfo?.video?.dynamic_cover
+
+      info?.cover,
+      info?.video?.cover,
+      info?.video?.origin_cover,
+      info?.video?.dynamic_cover
     ];
 
     for (
-      const value of candidates
+      const value
+      of values
     ) {
       const url =
-        extractUrl(value);
+        extractUrl(
+          value
+        );
 
       if (url) {
         return url;
@@ -662,15 +838,22 @@
     return '';
   }
 
-  function getVideoUrl(row) {
+  function getVideoUrl(
+    row
+  ) {
     const account =
       String(
-        row?.account || ''
-      ).replace(/^@/, '');
+        row?.account ||
+        ''
+      ).replace(
+        /^@/,
+        ''
+      );
 
     const videoId =
       String(
-        row?.video_id || ''
+        row?.video_id ||
+        ''
       );
 
     if (
@@ -690,13 +873,16 @@
     insight
   ) {
     const data =
-      insight.data || {};
+      insight.data ||
+      {};
 
     const info =
-      data.video_info || {};
+      data.video_info ||
+      {};
 
     const stats =
-      info.statistics || {};
+      info.statistics ||
+      {};
 
     const retention =
       data
@@ -723,7 +909,10 @@
 
     const durationSec =
       durationMs
-        ? durationMs / 1000
+        ? (
+            durationMs /
+            1000
+          )
         : '';
 
     const avgWatch =
@@ -777,14 +966,19 @@
 
     return {
       account:
-        info.author?.unique_id ||
-        item.author?.unique_id ||
-        item.author_unique_id ||
+        info.author
+          ?.unique_id ||
+        item.author
+          ?.unique_id ||
+        item
+          .author_unique_id ||
         '',
 
       nickname:
-        info.author?.nickname ||
-        item.author?.nickname ||
+        info.author
+          ?.nickname ||
+        item.author
+          ?.nickname ||
         '',
 
       video_id:
@@ -817,9 +1011,8 @@
         durationSec === ''
           ? ''
           : Number(
-              durationSec.toFixed(
-                3
-              )
+              durationSec
+                .toFixed(3)
             ),
 
       views,
@@ -844,8 +1037,10 @@
           avgWatch !== '' &&
           durationSec
         )
-          ? avgWatch /
-            durationSec
+          ? (
+              avgWatch /
+              durationSec
+            )
           : '',
 
       finish_rate:
@@ -927,63 +1122,38 @@
 
       like_rate:
         views
-          ? likes / views
+          ? (
+              likes /
+              views
+            )
           : '',
 
       engagement_rate:
         views
           ? (
-              likes +
-              comments +
-              shares +
-              favorites
-            ) /
-            views
+              (
+                likes +
+                comments +
+                shares +
+                favorites
+              ) /
+              views
+            )
           : ''
     };
   }
 
-  /* =========================================================
-     精确 Video ID → 视频行
-     不再按标题匹配
-     不再按页面顺序匹配
-  ========================================================= */
-
-  function climbVideoRow(element) {
-    let current =
-      element;
-
-    for (
-      let i = 0;
-      i < 12 &&
-      current &&
-      current !== document.body;
-      i++
-    ) {
-      const rect =
-        current
-          .getBoundingClientRect();
-
-      if (
-        rect.width > 650 &&
-        rect.height >= 55 &&
-        rect.height <= 180
-      ) {
-        return current;
-      }
-
-      current =
-        current.parentElement;
-    }
-
-    return null;
-  }
+  /* ========================================
+     精确匹配 Video ID
+  ======================================== */
 
   function findExactVideoRow(
     videoId
   ) {
     const id =
-      String(videoId);
+      String(
+        videoId
+      );
 
     const selectors = [
       `a[href*="${id}"]`,
@@ -994,16 +1164,19 @@
     ];
 
     for (
-      const selector of selectors
+      const selector
+      of selectors
     ) {
       try {
         const elements =
-          document.querySelectorAll(
-            selector
-          );
+          document
+            .querySelectorAll(
+              selector
+            );
 
         for (
-          const element of elements
+          const element
+          of elements
         ) {
           if (
             element.closest(
@@ -1013,31 +1186,67 @@
             continue;
           }
 
-          const row =
-            climbVideoRow(
-              element
-            );
+          let current =
+            element;
 
-          if (row) {
-            return row;
+          let best =
+            null;
+
+          let bestWidth =
+            0;
+
+          for (
+            let i = 0;
+            i < 12 &&
+            current &&
+            current !==
+              document.body;
+            i++
+          ) {
+            const rect =
+              current
+                .getBoundingClientRect();
+
+            if (
+              rect.width >
+                650 &&
+              rect.height >=
+                55 &&
+              rect.height <=
+                180
+            ) {
+              if (
+                rect.width >
+                bestWidth
+              ) {
+                best =
+                  current;
+
+                bestWidth =
+                  rect.width;
+              }
+            }
+
+            current =
+              current.parentElement;
+          }
+
+          if (best) {
+            return best;
           }
         }
+
       } catch {}
     }
 
-    /*
-      最后的精确 ID fallback：
-      只匹配 DOM 中确实包含当前 Video ID 的行。
-      不使用标题。
-    */
-
-    const candidates =
-      document.querySelectorAll(
-        '[role="row"], tr, li'
-      );
+    const rows =
+      document
+        .querySelectorAll(
+          '[role="row"],tr,li'
+        );
 
     for (
-      const row of candidates
+      const row of rows
     ) {
       const rect =
         row
@@ -1045,18 +1254,16 @@
 
       if (
         rect.width < 650 ||
-        rect.height < 50 ||
+        rect.height < 55 ||
         rect.height > 180
       ) {
         continue;
       }
 
-      const html =
-        row.outerHTML;
-
       if (
-        html &&
-        html.includes(id)
+        String(
+          row.outerHTML
+        ).includes(id)
       ) {
         return row;
       }
@@ -1065,25 +1272,18 @@
     return null;
   }
 
-  /* =========================
-     找 TikTok 原表头位置
-  ========================= */
+  /* ========================================
+     表头位置
+  ======================================== */
 
-  function cleanHeaderText(text) {
-    return String(
-      text || ''
-    )
-      .replace(/\s+/g, '')
-      .trim();
-  }
-
-  function findHeaderNode(
+  function findHeader(
     aliases
   ) {
     const nodes =
-      document.querySelectorAll(
-        'div,span,p'
-      );
+      document
+        .querySelectorAll(
+          'div,span,p'
+        );
 
     let best =
       null;
@@ -1100,14 +1300,19 @@
       }
 
       const text =
-        cleanHeaderText(
-          node.textContent
-        );
+        String(
+          node.textContent ||
+          ''
+        )
+          .replace(
+            /\s+/g,
+            ''
+          )
+          .trim();
 
       if (
-        !aliases.some(
-          alias =>
-            text === alias
+        !aliases.includes(
+          text
         )
       ) {
         continue;
@@ -1129,7 +1334,7 @@
       if (
         !best ||
         rect.width <
-        best.rect.width
+          best.rect.width
       ) {
         best = {
           node,
@@ -1141,30 +1346,30 @@
     return best;
   }
 
-  function detectHeaderPositions() {
+  function getHeaderPositions() {
     const privacy =
-      findHeaderNode([
+      findHeader([
         '隐私',
         '完播率'
       ]);
 
     const views =
-      findHeaderNode([
+      findHeader([
         '观看次数'
       ]);
 
     const likes =
-      findHeaderNode([
+      findHeader([
         '赞'
       ]);
 
     const comments =
-      findHeaderNode([
+      findHeader([
         '评论'
       ]);
 
     const actions =
-      findHeaderNode([
+      findHeader([
         '操作'
       ]);
 
@@ -1178,49 +1383,200 @@
     }
 
     /*
-      只改文字，不动任何列宽
+      只替换表头文字。
+      不调整任何 TikTok 原列宽。
     */
 
     if (
-      cleanHeaderText(
-        privacy.node.textContent
-      ) !== '完播率'
+      String(
+        privacy.node
+          .textContent
+      )
+        .replace(
+          /\s+/g,
+          ''
+        ) !==
+      '完播率'
     ) {
-      privacy.node.textContent =
+      privacy.node
+        .textContent =
         '完播率';
     }
 
-    headerPositions = {
-      privacyX:
+    return {
+      finish:
         privacy.rect.left +
-        privacy.rect.width / 2,
+        privacy.rect.width /
+        2,
 
-      viewsX:
+      views:
         views.rect.left +
-        views.rect.width / 2,
+        views.rect.width /
+        2,
 
-      likesX:
+      likes:
         likes.rect.left +
-        likes.rect.width / 2,
+        likes.rect.width /
+        2,
 
-      commentsX:
+      comments:
         comments.rect.left +
-        comments.rect.width / 2,
+        comments.rect.width /
+        2,
 
-      actionsX:
+      actions:
         actions
-          ? actions.rect.left +
-            actions.rect.width / 2
+          ? (
+              actions.rect.left +
+              actions.rect.width /
+              2
+            )
           : null
     };
-
-    return headerPositions;
   }
 
-  /* =========================
-     根据 X 坐标找当前行对应单元格
-     不依赖 DOM 列序号
-  ========================= */
+  /* ========================================
+     找出视频行真正的列容器
+  ======================================== */
+
+  function getColumnCells(
+    row
+  ) {
+    if (!row) {
+      return [];
+    }
+
+    const rowRect =
+      row
+        .getBoundingClientRect();
+
+    const candidates = [
+      row,
+      ...row.querySelectorAll(
+        'div,[role="row"]'
+      )
+    ];
+
+    let bestCells =
+      [];
+
+    let bestScore =
+      -Infinity;
+
+    for (
+      const container
+      of candidates
+    ) {
+      const containerRect =
+        container
+          .getBoundingClientRect();
+
+      if (
+        containerRect.width <
+        rowRect.width * 0.75
+      ) {
+        continue;
+      }
+
+      const cells = [
+        ...container.children
+      ].filter(
+        child => {
+          if (
+            child.classList
+              ?.contains(
+                'qtk-submetric'
+              ) ||
+            child.classList
+              ?.contains(
+                'qtk-action-meta'
+              )
+          ) {
+            return false;
+          }
+
+          const rect =
+            child
+              .getBoundingClientRect();
+
+          return (
+            rect.width >= 28 &&
+            rect.height >=
+              rowRect.height *
+              0.35 &&
+            rect.left >=
+              rowRect.left -
+              5 &&
+            rect.right <=
+              rowRect.right +
+              5
+          );
+        }
+      );
+
+      if (
+        cells.length < 5 ||
+        cells.length > 12
+      ) {
+        continue;
+      }
+
+      cells.sort(
+        (a, b) =>
+          a
+            .getBoundingClientRect()
+            .left -
+          b
+            .getBoundingClientRect()
+            .left
+      );
+
+      const first =
+        cells[0]
+          .getBoundingClientRect();
+
+      const last =
+        cells[
+          cells.length - 1
+        ]
+          .getBoundingClientRect();
+
+      const span =
+        last.right -
+        first.left;
+
+      const spanRatio =
+        span /
+        rowRect.width;
+
+      if (
+        spanRatio < 0.70
+      ) {
+        continue;
+      }
+
+      const score =
+        spanRatio * 100 +
+        cells.length * 3 -
+        Math.abs(
+          containerRect.height -
+          rowRect.height
+        );
+
+      if (
+        score >
+        bestScore
+      ) {
+        bestScore =
+          score;
+
+        bestCells =
+          cells;
+      }
+    }
+
+    return bestCells;
+  }
 
   function findCellAtX(
     row,
@@ -1233,210 +1589,172 @@
       return null;
     }
 
-    const rowRect =
-      row.getBoundingClientRect();
-
-    const y =
-      rowRect.top +
-      rowRect.height / 2;
-
-    let element =
-      document.elementFromPoint(
-        x,
-        y
+    const cells =
+      getColumnCells(
+        row
       );
 
     if (
-      !element ||
-      !row.contains(element)
+      !cells.length
     ) {
-      const descendants =
-        row.querySelectorAll(
-          'div,td'
-        );
-
-      let best =
-        null;
-
-      let bestDistance =
-        Infinity;
-
-      for (
-        const child of descendants
-      ) {
-        const rect =
-          child.getBoundingClientRect();
-
-        if (
-          rect.width < 20 ||
-          rect.height <
-          rowRect.height * 0.35
-        ) {
-          continue;
-        }
-
-        const center =
-          rect.left +
-          rect.width / 2;
-
-        const distance =
-          Math.abs(
-            center - x
-          );
-
-        if (
-          distance <
-          bestDistance
-        ) {
-          bestDistance =
-            distance;
-
-          best =
-            child;
-        }
-      }
-
-      return best;
+      return null;
     }
 
-    let current =
-      element;
+    /*
+      优先选择真正覆盖该 X 坐标的列。
+    */
+
+    for (
+      const cell of cells
+    ) {
+      const rect =
+        cell
+          .getBoundingClientRect();
+
+      if (
+        x >= rect.left - 3 &&
+        x <= rect.right + 3
+      ) {
+        return cell;
+      }
+    }
+
+    /*
+      没有覆盖时，选择中心点最近的列。
+    */
 
     let best =
       null;
 
-    while (
-      current &&
-      current !== row
+    let bestDistance =
+      Infinity;
+
+    for (
+      const cell of cells
     ) {
       const rect =
-        current
+        cell
           .getBoundingClientRect();
 
+      const center =
+        rect.left +
+        rect.width /
+        2;
+
+      const distance =
+        Math.abs(
+          center - x
+        );
+
       if (
-        rect.width >= 25 &&
-        rect.width <= 260 &&
-        rect.height >=
-          rowRect.height * 0.42
+        distance <
+        bestDistance
       ) {
         best =
-          current;
+          cell;
+
+        bestDistance =
+          distance;
       }
-
-      const parent =
-        current.parentElement;
-
-      if (
-        !parent ||
-        parent === row
-      ) {
-        break;
-      }
-
-      const parentRect =
-        parent
-          .getBoundingClientRect();
-
-      if (
-        parentRect.width >
-        rowRect.width * 0.55
-      ) {
-        break;
-      }
-
-      current =
-        parent;
     }
 
-    return best ||
-      element;
+    return best;
   }
 
-  /* =========================
-     保存原隐私内容
-  ========================= */
+  /* ========================================
+     清理虚拟列表残留数据
+  ======================================== */
 
-  function getOriginalPrivacy(
-    row,
-    cell
+  function clearInjectedMetrics(
+    row
   ) {
-    if (
+    if (!row) {
+      return;
+    }
+
+    row
+      .querySelectorAll(
+        '.qtk-submetric,.qtk-action-meta'
+      )
+      .forEach(
+        element =>
+          element.remove()
+      );
+  }
+
+  function prepareRow(
+    row,
+    videoId
+  ) {
+    if (!row) {
+      return;
+    }
+
+    const oldId =
       row.dataset
-        .qtkPrivacy
+        .qtkVideoId;
+
+    if (
+      oldId &&
+      oldId !==
+      String(videoId)
     ) {
-      return (
-        row.dataset
-          .qtkPrivacy
+      clearInjectedMetrics(
+        row
       );
     }
 
-    const text =
-      String(
-        cell?.innerText ||
-        cell?.textContent ||
-        ''
-      )
-        .replace(
-          /\s+/g,
-          ' '
-        )
-        .trim();
-
-    const privacy =
-      text ||
-      '所有人';
-
     row.dataset
-      .qtkPrivacy =
-      privacy;
-
-    return privacy;
+      .qtkVideoId =
+      String(videoId);
   }
 
-  /* =========================
-     插入副指标
-  ========================= */
+  /* ========================================
+     副指标
+  ======================================== */
 
   function setSubMetric(
     cell,
     key,
-    text
+    label,
+    value
   ) {
     if (!cell) {
       return;
     }
 
-    let el =
+    let metric =
       cell.querySelector(
         `:scope > .qtk-submetric[data-key="${key}"]`
       );
 
-    if (!el) {
-      el =
-        document.createElement(
-          'div'
-        );
+    if (!metric) {
+      metric =
+        document
+          .createElement(
+            'div'
+          );
 
-      el.className =
+      metric.className =
         'qtk-submetric';
 
-      el.dataset.key =
+      metric.dataset.key =
         key;
 
       cell.appendChild(
-        el
+        metric
       );
     }
 
-    el.textContent =
-      text;
+    metric.innerHTML = `
+      <span>${label}</span>
+      <b>${value}</b>
+    `;
   }
 
   function setActionMeta(
     cell,
-    row,
-    data,
-    privacy
+    data
   ) {
     if (!cell) {
       return;
@@ -1445,7 +1763,8 @@
     if (
       getComputedStyle(
         cell
-      ).position === 'static'
+      ).position ===
+      'static'
     ) {
       cell.style.position =
         'relative';
@@ -1458,9 +1777,10 @@
 
     if (!meta) {
       meta =
-        document.createElement(
-          'div'
-        );
+        document
+          .createElement(
+            'div'
+          );
 
       meta.className =
         'qtk-action-meta';
@@ -1470,43 +1790,38 @@
       );
     }
 
+    /*
+      不再显示隐私文字。
+      不再显示任何视频标题文字。
+    */
+
     meta.innerHTML = `
       <span>
-        +粉 ${
+        <small>+粉</small>
+        <b>${
           data.new_followers === ''
             ? '-'
             : data.new_followers
-        }
+        }</b>
       </span>
 
       <span>
-        互动 ${pct(
+        <small>互动</small>
+        <b>${pct(
           data.engagement_rate
-        )}
-      </span>
-
-      <span>
-        ${escapeHtml(
-          privacy
-        )}
+        )}</b>
       </span>
     `;
   }
 
-  /* =========================
-     把指标准确写入当前 Video ID 行
-  ========================= */
+  /* ========================================
+     写入公开视频指标
+  ======================================== */
 
   function applyMetricsToRow(
     item,
     data
   ) {
-    if (
-      isScheduled(item)
-    ) {
-      return false;
-    }
-
     const row =
       findExactVideoRow(
         item.item_id
@@ -1516,61 +1831,61 @@
       return false;
     }
 
+    prepareRow(
+      row,
+      item.item_id
+    );
+
+    clearInjectedMetrics(
+      row
+    );
+
     const positions =
-      detectHeaderPositions() ||
-      headerPositions;
+      getHeaderPositions();
 
     if (!positions) {
       return false;
     }
 
-    const privacyCell =
+    const finishCell =
       findCellAtX(
         row,
-        positions.privacyX
+        positions.finish
       );
 
     const viewsCell =
       findCellAtX(
         row,
-        positions.viewsX
+        positions.views
       );
 
     const likesCell =
       findCellAtX(
         row,
-        positions.likesX
+        positions.likes
       );
 
     const commentsCell =
       findCellAtX(
         row,
-        positions.commentsX
+        positions.comments
       );
 
-    const actionCell =
-      positions.actionsX
+    const actionsCell =
+      positions.actions
         ? findCellAtX(
             row,
-            positions.actionsX
+            positions.actions
           )
         : null;
 
-    const privacy =
-      getOriginalPrivacy(
-        row,
-        privacyCell
-      );
-
     /*
-      隐私列 → 完播率
+      完播率直接替换原隐私列内容
     */
 
-    if (
-      privacyCell
-    ) {
-      privacyCell.innerHTML = `
-        <div class="qtk-finish">
+    if (finishCell) {
+      finishCell.innerHTML = `
+        <div class="qtk-finish-value">
           ${pct(
             data.finish_rate
           )}
@@ -1579,61 +1894,130 @@
     }
 
     /*
-      保持 TikTok 原数据不动，
-      只在下面增加一行。
+      观看次数下方 → 观看倍率
     */
 
     setSubMetric(
       viewsCell,
       'watch_ratio',
-      `倍率 ${pct(
+      '倍率',
+      pct(
         data.watch_ratio
-      )}`
+      )
     );
+
+    /*
+      点赞下方 → 1秒留存
+    */
 
     setSubMetric(
       likesCell,
       'retention_1s',
-      `1s ${pct(
+      '1s',
+      pct(
         data.retention_1s
-      )}`
+      )
     );
+
+    /*
+      评论下方 → 3秒留存
+    */
 
     setSubMetric(
       commentsCell,
       'retention_3s',
-      `3s ${pct(
+      '3s',
+      pct(
         data.retention_3s
-      )}`
+      )
     );
+
+    /*
+      操作列底部 → 新增粉丝 + 互动率
+    */
 
     setActionMeta(
-      actionCell,
-      row,
-      data,
-      privacy
+      actionsCell,
+      data
     );
-
-    row.dataset
-      .qtkVideoId =
-      String(
-        item.item_id
-      );
 
     return true;
   }
 
-  /* =========================
+  /* ========================================
+     预约视频
+     不显示任何分析数据
+  ======================================== */
+
+  function applyScheduledState(
+    item
+  ) {
+    const row =
+      findExactVideoRow(
+        item.item_id
+      );
+
+    if (!row) {
+      return;
+    }
+
+    prepareRow(
+      row,
+      item.item_id
+    );
+
+    clearInjectedMetrics(
+      row
+    );
+
+    const positions =
+      getHeaderPositions();
+
+    if (!positions) {
+      return;
+    }
+
+    const finishCell =
+      findCellAtX(
+        row,
+        positions.finish
+      );
+
+    if (finishCell) {
+      finishCell.innerHTML = `
+        <div class="qtk-finish-empty">
+          —
+        </div>
+      `;
+    }
+  }
+
+  /* ========================================
      自动加载单条
-  ========================= */
+  ======================================== */
 
   async function loadMetric(
     item
   ) {
     if (
-      !item?.item_id ||
-      isScheduled(item)
+      !item?.item_id
     ) {
+      return;
+    }
+
+    /*
+      预约视频绝对不请求 Insight
+    */
+
+    if (
+      isScheduled(
+        item
+      )
+    ) {
+      applyScheduledState(
+        item
+      );
+
       return;
     }
 
@@ -1648,7 +2032,8 @@
       );
 
     if (
-      cached?.type === 'public'
+      cached?.type ===
+      'public'
     ) {
       applyMetricsToRow(
         item,
@@ -1668,10 +2053,8 @@
     }
 
     /*
-      只有当前 Video ID 能精确定位到 DOM 行，
-      才请求数据。
-
-      避免把数据写到其它视频。
+      DOM 内没有精确 Video ID，
+      不请求，不猜测，不按标题匹配。
     */
 
     const exactRow =
@@ -1694,9 +2077,11 @@
         );
 
       if (
-        insight.httpStatus !== 200 ||
+        insight.httpStatus !==
+          200 ||
         insight.data
-          ?.status_code !== 0
+          ?.status_code !==
+          0
       ) {
         throw new Error(
           'Insight request failed'
@@ -1712,7 +2097,7 @@
       if (
         privateStatus === 0
       ) {
-        const row =
+        const rowData =
           normalizeRow(
             item,
             insight
@@ -1724,18 +2109,19 @@
             type:
               'public',
 
-            row
+            row:
+              rowData
           }
         );
 
         detailRows.set(
           videoId,
-          row
+          rowData
         );
 
         applyMetricsToRow(
           item,
-          row
+          rowData
         );
 
       } else if (
@@ -1770,7 +2156,9 @@
         );
       }
 
-    } catch (error) {
+    } catch (
+      error
+    ) {
       console.warn(
         '[TikTok Collector]',
         videoId,
@@ -1796,9 +2184,9 @@
     }
   }
 
-  /* =========================
-     自动处理当前屏幕的视频
-  ========================= */
+  /* ========================================
+     当前屏幕自动加载
+  ======================================== */
 
   async function runMetrics() {
     if (busy) {
@@ -1809,24 +2197,20 @@
       return;
     }
 
-    detectHeaderPositions();
-
-    const visible = [];
-
-    for (
-      const item of items.values()
-    ) {
-      /*
-        预约视频：
-        完全跳过
+    /*
+      每次重新检测表头，
+      防止 TikTok DOM 重绘。
     */
 
-      if (
-        isScheduled(item)
-      ) {
-        continue;
-      }
+    getHeaderPositions();
 
+    const visiblePublished =
+      [];
+
+    for (
+      const item
+      of items.values()
+    ) {
       const row =
         findExactVideoRow(
           item.item_id
@@ -1837,22 +2221,43 @@
       }
 
       const rect =
-        row.getBoundingClientRect();
+        row
+          .getBoundingClientRect();
 
       if (
-        rect.bottom >= -150 &&
-        rect.top <=
-        window.innerHeight +
-        450
+        rect.bottom < -150 ||
+        rect.top >
+          window.innerHeight +
+          450
       ) {
-        visible.push(
+        continue;
+      }
+
+      /*
+        预约视频先清干净，
+        防止虚拟列表复用上一条数据。
+      */
+
+      if (
+        isScheduled(
+          item
+        )
+      ) {
+        applyScheduledState(
           item
         );
+
+        continue;
       }
+
+      visiblePublished.push(
+        item
+      );
     }
 
     for (
-      const item of visible
+      const item
+      of visiblePublished
     ) {
       await loadMetric(
         item
@@ -1878,9 +2283,9 @@
       );
   }
 
-  /* =========================
-     DOM Observer
-  ========================= */
+  /* ========================================
+     Observer
+  ======================================== */
 
   function startObserver() {
     if (
@@ -1902,9 +2307,6 @@
             );
 
           if (changed) {
-            headerPositions =
-              null;
-
             scheduleMetrics(
               450
             );
@@ -1937,14 +2339,10 @@
 
     window.addEventListener(
       'resize',
-      () => {
-        headerPositions =
-          null;
-
+      () =>
         scheduleMetrics(
-          300
-        );
-      },
+          250
+        ),
       {
         passive:
           true
@@ -1952,9 +2350,9 @@
     );
   }
 
-  /* =========================
-     分析
-  ========================= */
+  /* ========================================
+     周报分析
+  ======================================== */
 
   function getRangeDays() {
     const value =
@@ -1962,14 +2360,19 @@
         ?.value ||
       '7';
 
-    return value === 'all'
-      ? null
-      : Number(value);
+    return (
+      value === 'all'
+        ? null
+        : Number(
+            value
+          )
+    );
   }
 
   function getAnalysisRows() {
     const rows = [
-      ...detailRows.values()
+      ...detailRows
+        .values()
     ];
 
     const days =
@@ -1985,7 +2388,8 @@
 
     const cutoff =
       Math.floor(
-        Date.now() / 1000
+        Date.now() /
+        1000
       ) -
       days *
       86400;
@@ -2003,7 +2407,9 @@
       );
   }
 
-  function summaryFor(rows) {
+  function summaryFor(
+    rows
+  ) {
     return {
       count:
         rows.length,
@@ -2082,7 +2488,7 @@
   function metricLabel(
     metric
   ) {
-    const labels = {
+    const map = {
       views:
         '播放量',
 
@@ -2106,7 +2512,7 @@
     };
 
     return (
-      labels[metric] ||
+      map[metric] ||
       metric
     );
   }
@@ -2155,7 +2561,9 @@
         5
       );
 
-    if (!list.length) {
+    if (
+      !list.length
+    ) {
       return `
         <div class="qtk-empty">
           暂无数据
@@ -2181,11 +2589,7 @@
                 class="qtk-top-title"
                 title="${escapeHtml(row.title)}"
               >
-                ${escapeHtml(
-                  shortTitle(
-                    row.title
-                  )
-                )}
+                ${escapeHtml(shortTitle(row.title))}
               </div>
 
               <div class="qtk-top-meta">
@@ -2197,12 +2601,10 @@
             </div>
 
             <div class="qtk-top-value">
-              ${
-                metricDisplay(
-                  metric,
-                  row[metric]
-                )
-              }
+              ${metricDisplay(
+                metric,
+                row[metric]
+              )}
             </div>
 
           </div>
@@ -2230,7 +2632,8 @@
 
     $('qtk-summary-count')
       .textContent =
-      summary.count || 0;
+      summary.count ||
+      0;
 
     $('qtk-summary-avg')
       .textContent =
@@ -2279,9 +2682,9 @@
       );
   }
 
-  /* =========================
-     页面样式
-  ========================= */
+  /* ========================================
+     CSS
+  ======================================== */
 
   function injectStyle() {
     if (
@@ -2293,9 +2696,10 @@
     }
 
     const style =
-      document.createElement(
-        'style'
-      );
+      document
+        .createElement(
+          'style'
+        );
 
     style.id =
       'qualitell-tiktok-style';
@@ -2303,20 +2707,20 @@
     style.textContent = `
 
       /*
-        不调整 TikTok 原列宽
-        不覆盖 TikTok 表格布局
-      */
+       * 不修改 TikTok 原列宽
+       * 不新增横向大框
+       * 完播率直接使用原隐私列
+       */
 
-      .qtk-finish {
+      .qtk-finish-value {
+        width:100% !important;
+
         display:flex !important;
         align-items:center !important;
         justify-content:center !important;
 
-        width:100% !important;
-
-        font-size:12px !important;
-        line-height:18px !important;
-
+        font-size:13px !important;
+        line-height:20px !important;
         font-weight:700 !important;
 
         color:#161823 !important;
@@ -2324,22 +2728,63 @@
         white-space:nowrap !important;
       }
 
-      .qtk-submetric {
-        margin-top:3px !important;
+      .qtk-finish-empty {
+        width:100% !important;
 
-        font-size:9px !important;
-        line-height:11px !important;
+        display:flex !important;
+        align-items:center !important;
+        justify-content:center !important;
+
+        font-size:13px !important;
+        line-height:20px !important;
+
+        color:#b5b5ba !important;
+      }
+
+      /*
+       * 原数据下方的小指标
+       */
+
+      .qtk-submetric {
+        margin-top:4px !important;
+
+        display:flex !important;
+        align-items:baseline !important;
+        justify-content:center !important;
+
+        gap:3px !important;
+
+        white-space:nowrap !important;
+
+        line-height:14px !important;
+
+        pointer-events:none !important;
+      }
+
+      .qtk-submetric span {
+        font-size:10px !important;
+        line-height:14px !important;
 
         font-weight:500 !important;
 
         color:#8a8b91 !important;
-
-        text-align:center !important;
-
-        white-space:nowrap !important;
-
-        pointer-events:none !important;
       }
+
+      .qtk-submetric b {
+        font-size:11.5px !important;
+        line-height:14px !important;
+
+        font-weight:700 !important;
+
+        color:#36363d !important;
+      }
+
+      /*
+       * 操作列下方
+       * 只显示 +粉 / 互动
+       * 不显示隐私文字
+       * 不显示标题文字
+       */
 
       .qtk-action-meta {
         position:absolute !important;
@@ -2351,20 +2796,45 @@
           translateX(-50%) !important;
 
         display:flex !important;
-
         align-items:center !important;
 
-        gap:5px !important;
+        gap:9px !important;
 
         white-space:nowrap !important;
 
-        font-size:8px !important;
-        line-height:10px !important;
+        pointer-events:none !important;
+      }
+
+      .qtk-action-meta span {
+        display:flex !important;
+        align-items:baseline !important;
+
+        gap:3px !important;
+
+        white-space:nowrap !important;
+      }
+
+      .qtk-action-meta small {
+        font-size:9.5px !important;
+        line-height:12px !important;
 
         color:#8a8b91 !important;
 
-        pointer-events:none !important;
+        font-weight:500 !important;
       }
+
+      .qtk-action-meta b {
+        font-size:11px !important;
+        line-height:12px !important;
+
+        color:#36363d !important;
+
+        font-weight:700 !important;
+      }
+
+      /* =====================================
+         右下角控制面板
+      ===================================== */
 
       #qualitell-tiktok-panel,
       #qualitell-tiktok-panel * {
@@ -2380,7 +2850,6 @@
         z-index:2147483647;
 
         width:310px;
-
         max-height:84vh;
 
         overflow:hidden;
@@ -2392,7 +2861,7 @@
 
         border:
           1px solid
-          rgba(255,255,255,.1);
+          rgba(255,255,255,.10);
 
         border-radius:11px;
 
@@ -2408,14 +2877,10 @@
 
       .qtk-header {
         display:flex;
-
         align-items:center;
+        justify-content:space-between;
 
-        justify-content:
-          space-between;
-
-        padding:
-          10px 12px;
+        padding:10px 12px;
 
         border-bottom:
           1px solid
@@ -2463,9 +2928,7 @@
         display:flex;
 
         align-items:center;
-
-        justify-content:
-          space-between;
+        justify-content:space-between;
 
         gap:10px;
 
@@ -2573,11 +3036,8 @@
 
       .qtk-section-title {
         display:flex;
-
         align-items:center;
-
-        justify-content:
-          space-between;
+        justify-content:space-between;
 
         margin-bottom:7px;
 
@@ -2634,7 +3094,6 @@
 
       .qtk-top-item {
         display:flex;
-
         align-items:center;
 
         gap:6px;
@@ -2684,7 +3143,7 @@
         font-size:8px;
 
         color:
-          rgba(255,255,255,.4);
+          rgba(255,255,255,.40);
       }
 
       .qtk-top-value {
@@ -2714,6 +3173,7 @@
         color:
           rgba(255,255,255,.36);
       }
+
     `;
 
     (
@@ -2724,9 +3184,9 @@
     );
   }
 
-  /* =========================
-     面板
-  ========================= */
+  /* ========================================
+     控制面板
+  ======================================== */
 
   function buildPanel() {
     if (
@@ -2758,7 +3218,7 @@
           </div>
 
           <div class="qtk-version">
-            V${VERSION} · ID精确匹配
+            V${VERSION}
           </div>
 
         </div>
@@ -2861,7 +3321,6 @@
               class="qtk-select"
               style="width:105px"
             >
-
               <option value="7">
                 最近7天
               </option>
@@ -2877,7 +3336,6 @@
               <option value="all">
                 全部
               </option>
-
             </select>
 
           </div>
@@ -2922,7 +3380,6 @@
               id="qtk-rank-metric"
               class="qtk-select"
             >
-
               <option value="views">
                 播放 TOP
               </option>
@@ -2950,7 +3407,6 @@
               <option value="engagement_rate">
                 互动率 TOP
               </option>
-
             </select>
 
           </div>
@@ -2963,10 +3419,6 @@
 
           </div>
 
-        </div>
-
-        <div class="qtk-tip">
-          预约视频完全跳过。公开视频按 Video ID 精确对应，不再按标题或页面顺序匹配。
         </div>
 
       </div>
@@ -3047,7 +3499,9 @@
     );
   }
 
-  function updateUI(status) {
+  function updateUI(
+    status
+  ) {
     if (
       !$(
         'qualitell-tiktok-panel'
@@ -3107,16 +3561,17 @@
     renderAnalysis();
   }
 
-  /* =========================
+  /* ========================================
      扫描
-  ========================= */
+  ======================================== */
 
   async function scanAll() {
     if (busy) {
       return;
     }
 
-    busy = true;
+    busy =
+      true;
 
     updateUI(
       '扫描中…'
@@ -3161,8 +3616,10 @@
           .scrollHeight;
 
       if (
-        newCount === oldCount &&
-        newHeight === oldHeight
+        newCount ===
+          oldCount &&
+        newHeight ===
+          oldHeight
       ) {
         stable++;
       } else {
@@ -3197,9 +3654,9 @@
     scheduleMetrics();
   }
 
-  /* =========================
-     手动全量采集
-  ========================= */
+  /* ========================================
+     全部数据
+  ======================================== */
 
   async function fetchAllInsights() {
     if (
@@ -3231,7 +3688,8 @@
       '0%';
 
     for (
-      const item of list
+      const item
+      of list
     ) {
       const videoId =
         String(
@@ -3245,9 +3703,11 @@
           );
 
         if (
-          insight.httpStatus !== 200 ||
+          insight.httpStatus !==
+            200 ||
           insight.data
-            ?.status_code !== 0
+            ?.status_code !==
+            0
         ) {
           throw new Error(
             'Insight failed'
@@ -3263,7 +3723,7 @@
         if (
           privateStatus === 0
         ) {
-          const row =
+          const data =
             normalizeRow(
               item,
               insight
@@ -3271,7 +3731,7 @@
 
           detailRows.set(
             videoId,
-            row
+            data
           );
 
           metricCache.set(
@@ -3280,13 +3740,14 @@
               type:
                 'public',
 
-              row
+              row:
+                data
             }
           );
 
           applyMetricsToRow(
             item,
-            row
+            data
           );
 
         } else if (
@@ -3308,13 +3769,13 @@
       } catch (
         error
       ) {
-        failedCount++;
-
         console.warn(
           '[TikTok Collector]',
           videoId,
           error
         );
+
+        failedCount++;
       }
 
       completed++;
@@ -3366,9 +3827,6 @@
     failedCount =
       0;
 
-    headerPositions =
-      null;
-
     document
       .querySelectorAll(
         '.qtk-submetric,.qtk-action-meta'
@@ -3383,9 +3841,9 @@
     );
   }
 
-  /* =========================
+  /* ========================================
      CSV
-  ========================= */
+  ======================================== */
 
   const exportColumns = [
     ['账号', 'account'],
@@ -3450,9 +3908,10 @@
       );
 
     const link =
-      document.createElement(
-        'a'
-      );
+      document
+        .createElement(
+          'a'
+        );
 
     link.href =
       url;
@@ -3480,10 +3939,13 @@
 
   function exportCsv() {
     const rows = [
-      ...detailRows.values()
+      ...detailRows
+        .values()
     ];
 
-    if (!rows.length) {
+    if (
+      !rows.length
+    ) {
       return;
     }
 
@@ -3500,20 +3962,24 @@
       columns
         .map(
           ([label]) =>
-            csvEscape(label)
+            csvEscape(
+              label
+            )
         )
         .join(',')
     ];
 
     for (
-      const row of rows
+      const row
+      of rows
     ) {
       lines.push(
         columns
           .map(
             ([, key]) => {
               if (
-                key === '__url'
+                key ===
+                '__url'
               ) {
                 return csvEscape(
                   getVideoUrl(
@@ -3553,15 +4019,17 @@
 
       `TikTok数据_${new Date()
         .toISOString()
-        .slice(0, 10)}.csv`
+        .slice(0,10)}.csv`
     );
   }
 
-  /* =========================
-     Excel
-  ========================= */
+  /* ========================================
+     Excel 封面
+  ======================================== */
 
-  function gmFetchBlob(url) {
+  function gmFetchBlob(
+    url
+  ) {
     return new Promise(
       (
         resolve,
@@ -3736,7 +4204,8 @@
       0;
 
     for (
-      const row of rows
+      const row
+      of rows
     ) {
       const data =
         await getCoverData(
@@ -3756,6 +4225,7 @@
                 'jpeg'
             })
           );
+
         } catch {}
       }
 
@@ -3769,7 +4239,7 @@
     return map;
   }
 
-  function border() {
+  function excelBorder() {
     const side = {
       style:
         'thin',
@@ -3809,6 +4279,7 @@
 
     cell.value = {
       text,
+
       hyperlink:
         url
     };
@@ -3830,23 +4301,24 @@
     images
   ) {
     const sheet =
-      workbook.addWorksheet(
-        '原始数据',
-        {
-          views: [
-            {
-              state:
-                'frozen',
+      workbook
+        .addWorksheet(
+          '原始数据',
+          {
+            views: [
+              {
+                state:
+                  'frozen',
 
-              xSplit:
-                2,
+                xSplit:
+                  2,
 
-              ySplit:
-                1
-            }
-          ]
-        }
-      );
+                ySplit:
+                  1
+              }
+            ]
+          }
+        );
 
     const columns = [
       ['封面', 'cover', 8],
@@ -3889,7 +4361,9 @@
       );
 
     const header =
-      sheet.getRow(1);
+      sheet.getRow(
+        1
+      );
 
     header.height =
       25;
@@ -4009,7 +4483,7 @@
         row.eachCell(
           cell => {
             cell.border =
-              border();
+              excelBorder();
 
             cell.alignment = {
               vertical:
@@ -4129,9 +4603,10 @@
     rows
   ) {
     const sheet =
-      workbook.addWorksheet(
-        '本期分析'
-      );
+      workbook
+        .addWorksheet(
+          '本期分析'
+        );
 
     const summary =
       summaryFor(
@@ -4246,7 +4721,8 @@
     ]);
 
     for (
-      const data of top
+      const data
+      of top
     ) {
       const row =
         sheet.addRow([
@@ -4317,14 +4793,17 @@
     }
 
     const rows = [
-      ...detailRows.values()
+      ...detailRows
+        .values()
     ].sort(
       (a, b) =>
         b.publish_ts -
         a.publish_ts
     );
 
-    if (!rows.length) {
+    if (
+      !rows.length
+    ) {
       return;
     }
 
@@ -4404,13 +4883,14 @@
     }
   }
 
-  /* =========================
+  /* ========================================
      启动
-  ========================= */
+  ======================================== */
 
   function boot() {
     if (
-      !document.documentElement
+      !document
+        .documentElement
     ) {
       setTimeout(
         boot,
@@ -4438,14 +4918,16 @@
       document.readyState ===
       'loading'
     ) {
-      document.addEventListener(
-        'DOMContentLoaded',
-        start,
-        {
-          once:
-            true
-        }
-      );
+      document
+        .addEventListener(
+          'DOMContentLoaded',
+          start,
+          {
+            once:
+              true
+          }
+        );
+
     } else {
       start();
     }
